@@ -1,19 +1,27 @@
 import { randomName } from '@n8n/backend-test-utils';
-import { InstalledPackages, InstalledNodesRepository, InstalledPackagesRepository } from '@n8n/db';
 import { Container } from '@n8n/di';
 
 import { NODE_PACKAGE_PREFIX } from '@/constants';
+import { InstalledNodesRepository } from '@/modules/community-packages/installed-nodes.repository';
+import { InstalledPackages } from '@/modules/community-packages/installed-packages.entity';
+import { InstalledPackagesRepository } from '@/modules/community-packages/installed-packages.repository';
 
 import { COMMUNITY_NODE_VERSION, COMMUNITY_PACKAGE_VERSION } from '../constants';
 
 export const mockPackageName = () => NODE_PACKAGE_PREFIX + randomName();
 
-export const mockPackage = () =>
-	Container.get(InstalledPackagesRepository).create({
+export const mockPackage = (overrides: Partial<InstalledPackages> = {}): InstalledPackages => {
+	const now = new Date();
+
+	return Container.get(InstalledPackagesRepository).create({
 		packageName: mockPackageName(),
 		installedVersion: COMMUNITY_PACKAGE_VERSION.CURRENT,
 		installedNodes: [],
+		createdAt: now,
+		updatedAt: now,
+		...overrides,
 	});
+};
 
 export const mockNode = (packageName: string) => {
 	const nodeName = randomName();
@@ -26,21 +34,15 @@ export const mockNode = (packageName: string) => {
 	});
 };
 
-export const emptyPackage = async () => {
-	const installedPackage = new InstalledPackages();
-	installedPackage.installedNodes = [];
-	return installedPackage;
-};
-
 export function mockPackagePair(): InstalledPackages[] {
-	const pkgA = mockPackage();
-	const nodeA = mockNode(pkgA.packageName);
-	pkgA.installedNodes = [nodeA];
+	const packageNameA = mockPackageName();
+	const packageNameB = mockPackageName();
 
-	const pkgB = mockPackage();
-	const nodeB1 = mockNode(pkgB.packageName);
-	const nodeB2 = mockNode(pkgB.packageName);
-	pkgB.installedNodes = [nodeB1, nodeB2];
-
-	return [pkgA, pkgB];
+	return [
+		mockPackage({ packageName: packageNameA, installedNodes: [mockNode(packageNameA)] }),
+		mockPackage({
+			packageName: packageNameB,
+			installedNodes: [mockNode(packageNameB), mockNode(packageNameB)],
+		}),
+	];
 }

@@ -12,7 +12,6 @@ import { Merge } from '../../../nodes-base/dist/nodes/Merge/Merge.node';
 import { NoOp } from '../../../nodes-base/dist/nodes/NoOp/NoOp.node';
 import { Set } from '../../../nodes-base/dist/nodes/Set/Set.node';
 import { SplitInBatches } from '../../../nodes-base/dist/nodes/SplitInBatches/SplitInBatches.node';
-import { Start } from '../../../nodes-base/dist/nodes/Start/Start.node';
 
 export const predefinedNodesTypes: INodeTypeData = {
 	'n8n-nodes-base.if': {
@@ -29,10 +28,6 @@ export const predefinedNodesTypes: INodeTypeData = {
 	},
 	'n8n-nodes-base.set': {
 		type: new Set(),
-		sourcePath: '',
-	},
-	'n8n-nodes-base.start': {
-		type: new Start(),
 		sourcePath: '',
 	},
 	'n8n-nodes-base.manualTrigger': {
@@ -386,7 +381,7 @@ export const legacyWorkflowExecuteTests: WorkflowTestData[] = [
 						parameters: {},
 						id: '41589b0b-0521-41ae-b0c6-80a016af803e',
 						name: 'Start',
-						type: 'n8n-nodes-base.start',
+						type: 'n8n-nodes-base.manualTrigger',
 						typeVersion: 1,
 						position: [160, 240],
 					},
@@ -737,7 +732,7 @@ export const legacyWorkflowExecuteTests: WorkflowTestData[] = [
 						parameters: {},
 						id: '89a78e50-2ec6-48bf-be5f-3838600cd08a',
 						name: 'Start',
-						type: 'n8n-nodes-base.start',
+						type: 'n8n-nodes-base.manualTrigger',
 						typeVersion: 1,
 						position: [-20, 700],
 					},
@@ -995,7 +990,7 @@ export const legacyWorkflowExecuteTests: WorkflowTestData[] = [
 						id: 'uuid-1',
 						parameters: {},
 						name: 'Start',
-						type: 'n8n-nodes-base.start',
+						type: 'n8n-nodes-base.manualTrigger',
 						typeVersion: 1,
 						position: [100, 300],
 					},
@@ -1056,7 +1051,7 @@ export const legacyWorkflowExecuteTests: WorkflowTestData[] = [
 						id: 'uuid-1',
 						parameters: {},
 						name: 'Start',
-						type: 'n8n-nodes-base.start',
+						type: 'n8n-nodes-base.manualTrigger',
 						typeVersion: 1,
 						position: [100, 300],
 					},
@@ -1278,7 +1273,7 @@ export const legacyWorkflowExecuteTests: WorkflowTestData[] = [
 						id: 'uuid-10',
 						parameters: {},
 						name: 'Start',
-						type: 'n8n-nodes-base.start',
+						type: 'n8n-nodes-base.manualTrigger',
 						typeVersion: 1,
 						position: [100, 300],
 					},
@@ -1493,7 +1488,7 @@ export const legacyWorkflowExecuteTests: WorkflowTestData[] = [
 					{
 						parameters: {},
 						name: 'Start',
-						type: 'n8n-nodes-base.start',
+						type: 'n8n-nodes-base.manualTrigger',
 						typeVersion: 1,
 						id: 'uuid-1',
 						position: [250, 450],
@@ -1649,7 +1644,7 @@ export const legacyWorkflowExecuteTests: WorkflowTestData[] = [
 						id: 'uuid-1',
 						parameters: {},
 						name: 'Start',
-						type: 'n8n-nodes-base.start',
+						type: 'n8n-nodes-base.manualTrigger',
 						typeVersion: 1,
 						position: [250, 300],
 					},
@@ -1872,7 +1867,7 @@ export const legacyWorkflowExecuteTests: WorkflowTestData[] = [
 						id: 'uuid-1',
 						parameters: {},
 						name: 'Start',
-						type: 'n8n-nodes-base.start',
+						type: 'n8n-nodes-base.manualTrigger',
 						typeVersion: 1,
 						position: [250, 300],
 					},
@@ -2022,7 +2017,7 @@ export const legacyWorkflowExecuteTests: WorkflowTestData[] = [
 						id: 'uuid-1',
 						parameters: {},
 						name: 'Start',
-						type: 'n8n-nodes-base.start',
+						type: 'n8n-nodes-base.manualTrigger',
 						typeVersion: 1,
 						position: [250, 300],
 					},
@@ -2170,7 +2165,7 @@ export const legacyWorkflowExecuteTests: WorkflowTestData[] = [
 						id: 'uuid-1',
 						parameters: {},
 						name: 'Start',
-						type: 'n8n-nodes-base.start',
+						type: 'n8n-nodes-base.manualTrigger',
 						typeVersion: 1,
 						position: [240, 300],
 					},
@@ -2312,7 +2307,7 @@ export const legacyWorkflowExecuteTests: WorkflowTestData[] = [
 						parameters: {},
 						id: '3e4ab8bb-2e22-45d9-9287-0265f2ee9c4b',
 						name: 'Start',
-						type: 'n8n-nodes-base.start',
+						type: 'n8n-nodes-base.manualTrigger',
 						typeVersion: 1,
 						position: [300, 620],
 					},
@@ -2829,6 +2824,139 @@ export const legacyWorkflowExecuteTests: WorkflowTestData[] = [
 			nodeData: {},
 		},
 	},
+	{
+		description:
+			'should keep executing when a loop-back edge lands on a later input of a multi-input node',
+		input: {
+			workflowData: {
+				nodes: [
+					{
+						parameters: {},
+						id: 'b8b0b1a0-0000-4000-8000-000000000001',
+						name: 'Start',
+						type: 'n8n-nodes-base.manualTrigger',
+						typeVersion: 1,
+						position: [0, 0],
+					},
+					{
+						parameters: {},
+						id: 'b8b0b1a0-0000-4000-8000-000000000002',
+						name: 'Merge',
+						type: 'n8n-nodes-base.merge',
+						typeVersion: 2.1,
+						position: [200, 0],
+					},
+					{
+						parameters: {
+							conditions: {
+								number: [
+									{
+										value1: '={{ $json.attempt || 0 }}',
+										operation: 'larger',
+										value2: 0,
+									},
+								],
+							},
+						},
+						id: 'b8b0b1a0-0000-4000-8000-000000000003',
+						name: 'IF',
+						type: 'n8n-nodes-base.if',
+						typeVersion: 1,
+						position: [400, 0],
+					},
+					{
+						parameters: {
+							values: {
+								number: [
+									{
+										name: 'attempt',
+										value: '={{ ($input.first().json.attempt || 0) + 1 }}',
+									},
+								],
+							},
+							options: {},
+						},
+						id: 'b8b0b1a0-0000-4000-8000-000000000004',
+						name: 'Retry',
+						type: 'n8n-nodes-base.set',
+						typeVersion: 2,
+						position: [400, 200],
+					},
+					{
+						parameters: {},
+						id: 'b8b0b1a0-0000-4000-8000-000000000005',
+						name: 'Done',
+						type: 'n8n-nodes-base.noOp',
+						typeVersion: 1,
+						position: [600, 0],
+					},
+				],
+				connections: {
+					Start: {
+						main: [
+							[
+								{
+									node: 'Merge',
+									type: NodeConnectionTypes.Main,
+									index: 0,
+								},
+							],
+						],
+					},
+					Merge: {
+						main: [
+							[
+								{
+									node: 'IF',
+									type: NodeConnectionTypes.Main,
+									index: 0,
+								},
+							],
+						],
+					},
+					IF: {
+						main: [
+							[
+								{
+									node: 'Done',
+									type: NodeConnectionTypes.Main,
+									index: 0,
+								},
+							],
+							[
+								{
+									node: 'Retry',
+									type: NodeConnectionTypes.Main,
+									index: 0,
+								},
+							],
+						],
+					},
+					Retry: {
+						main: [
+							[
+								{
+									node: 'Merge',
+									type: NodeConnectionTypes.Main,
+									index: 1,
+								},
+							],
+						],
+					},
+				},
+			},
+		},
+		output: {
+			nodeExecutionOrder: ['Start', 'Merge', 'IF', 'Retry', 'Merge', 'IF', 'Done'],
+			nodeData: {
+				Start: [[{}]],
+				Merge: [[{}], [{ attempt: 1 }]],
+				IF: [[], [{ attempt: 1 }]],
+				Retry: [[{ attempt: 1 }]],
+				Done: [[{ attempt: 1 }]],
+			},
+		},
+	},
 ];
 
 export const v1WorkflowExecuteTests: WorkflowTestData[] = [
@@ -2843,7 +2971,7 @@ export const v1WorkflowExecuteTests: WorkflowTestData[] = [
 						id: 'uuid-1',
 						parameters: {},
 						name: 'Start',
-						type: 'n8n-nodes-base.start',
+						type: 'n8n-nodes-base.manualTrigger',
 						typeVersion: 1,
 						position: [100, 300],
 					},
@@ -3071,7 +3199,7 @@ export const v1WorkflowExecuteTests: WorkflowTestData[] = [
 						id: 'uuid-10',
 						parameters: {},
 						name: 'Start',
-						type: 'n8n-nodes-base.start',
+						type: 'n8n-nodes-base.manualTrigger',
 						typeVersion: 1,
 						position: [100, 300],
 					},
@@ -3302,7 +3430,7 @@ export const v1WorkflowExecuteTests: WorkflowTestData[] = [
 						parameters: {},
 						id: '3e4ab8bb-2e22-45d9-9287-0265f2ee9c4b',
 						name: 'Start',
-						type: 'n8n-nodes-base.start',
+						type: 'n8n-nodes-base.manualTrigger',
 						typeVersion: 1,
 						position: [300, 620],
 					},
@@ -3922,7 +4050,7 @@ export const v1WorkflowExecuteTests: WorkflowTestData[] = [
 						parameters: {},
 						id: '89a78e50-2ec6-48bf-be5f-3838600cd08a',
 						name: 'Start',
-						type: 'n8n-nodes-base.start',
+						type: 'n8n-nodes-base.manualTrigger',
 						typeVersion: 1,
 						position: [-20, 700],
 					},
@@ -4208,7 +4336,7 @@ export const v1WorkflowExecuteTests: WorkflowTestData[] = [
 						parameters: {},
 						id: '9c0cb647-5d60-40dc-b791-4946ee260a5d',
 						name: 'Start',
-						type: 'n8n-nodes-base.start',
+						type: 'n8n-nodes-base.manualTrigger',
 						typeVersion: 1,
 						position: [180, 240],
 					},
@@ -4513,7 +4641,7 @@ export const v1WorkflowExecuteTests: WorkflowTestData[] = [
 						parameters: {},
 						id: '41589b0b-0521-41ae-b0c6-80a016af803e',
 						name: 'Start',
-						type: 'n8n-nodes-base.start',
+						type: 'n8n-nodes-base.manualTrigger',
 						typeVersion: 1,
 						position: [160, 240],
 					},
@@ -4804,7 +4932,7 @@ export const v1WorkflowExecuteTests: WorkflowTestData[] = [
 						parameters: {},
 						id: '84b789e9-0dfc-4aa3-b0b2-cedf8966f904',
 						name: 'Start',
-						type: 'n8n-nodes-base.start',
+						type: 'n8n-nodes-base.manualTrigger',
 						position: [440, 1100],
 						typeVersion: 1,
 					},

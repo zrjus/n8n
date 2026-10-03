@@ -23,8 +23,9 @@ export const getN8NVersion = (): string => {
 export const N8N_VERSION = getN8NVersion();
 
 export const BASE_URL = process.env.AIRTOP_BASE_URL ?? 'https://api.airtop.ai/api/v1';
-export const INTEGRATION_URL =
-	process.env.AIRTOP_INTEGRATION_URL ?? 'https://portal-api.airtop.ai/integrations/v1/no-code';
+export const BASE_URL_V2 = process.env.AIRTOP_BASE_URL_V2 ?? 'https://api.airtop.ai/api/v2';
+export const AIRTOP_HOOKS_BASE_URL =
+	process.env.AIRTOP_HOOKS_BASE_URL ?? 'https://api.airtop.ai/api/hooks';
 
 // Session operations
 export const DEFAULT_TIMEOUT_MINUTES = 10;
@@ -38,20 +39,27 @@ export const SESSION_STATUS = {
 
 // Operations
 export const OPERATION_TIMEOUT = 5 * 60 * 1000; // 5 mins
+export const AGENT_MIN_TIMEOUT_SECONDS = 10;
 
 // Scroll operation
 export type TScrollingMode = 'manual' | 'automatic';
+
+// Browser profile identifier charset — mirrors the Airtop backend's alphanum-hyphen
+// rule (letters, numbers, and hyphens only), which covers both UUIDs and the custom
+// names older profiles can use.
+export const PROFILE_IDENTIFIER_REGEX = /^[a-zA-Z0-9-]+$/;
 
 // Error messages
 export const ERROR_MESSAGES = {
 	SESSION_ID_REQUIRED: "Please fill the 'Session ID' parameter",
 	WINDOW_ID_REQUIRED: "Please fill the 'Window ID' parameter",
 	URL_REQUIRED: "Please fill the 'URL' parameter",
-	PROFILE_NAME_INVALID: "'Profile Name' should only contain letters, numbers and dashes",
+	PROFILE_NAME_INVALID: "'Browser Profile ID' should only contain letters, numbers and dashes",
 	TIMEOUT_MINUTES_INVALID: `Timeout must be between ${MIN_TIMEOUT_MINUTES} and ${MAX_TIMEOUT_MINUTES} minutes`,
 	TIMEOUT_REACHED: 'Timeout reached while waiting for the operation to complete',
+	AGENT_TIMEOUT_INVALID: `Timeout must be at least ${AGENT_MIN_TIMEOUT_SECONDS} seconds`,
 	URL_INVALID: "'URL' must start with 'http' or 'https'",
-	PROFILE_NAME_REQUIRED: "'Profile Name' is required when 'Save Profile' is enabled",
+	PROFILE_NAME_REQUIRED: "'Browser Profile ID' is required when 'Save Profile' is enabled",
 	REQUIRED_PARAMETER: "Please fill the '{{field}}' parameter",
 	PROXY_URL_REQUIRED: "Please fill the 'Proxy URL' parameter",
 	PROXY_URL_INVALID: "'Proxy URL' must start with 'http' or 'https'",

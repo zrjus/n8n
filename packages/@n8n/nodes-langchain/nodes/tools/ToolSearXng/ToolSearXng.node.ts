@@ -1,21 +1,98 @@
-import { SearxngSearch } from '@langchain/community/tools/searxng_search';
-import { NodeConnectionTypes } from 'n8n-workflow';
+import { DynamicTool } from '@langchain/core/tools';
+import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 import type {
+	IDataObject,
+	IExecuteFunctions,
+	INodeExecutionData,
 	INodeType,
 	INodeTypeDescription,
 	ISupplyDataFunctions,
 	SupplyData,
 } from 'n8n-workflow';
 
-import { logWrapper } from '@utils/logWrapper';
-import { getConnectionHintNoticeField } from '@utils/sharedFields';
+import { logWrapper, getConnectionHintNoticeField } from '@n8n/ai-utilities';
 
 type Options = {
-	numResults: number;
-	pageNumber: number;
-	language: string;
-	safesearch: 0 | 1 | 2;
+	numResults?: number;
+	pageNumber?: number;
+	language?: string;
+	safesearch?: 0 | 1 | 2;
 };
+
+type SearXngResponse = {
+	results?: Array<{ title?: string; url?: string; content?: string }>;
+	answers?: string[];
+	infoboxes?: Array<{ content?: string }>;
+	suggestions?: string[];
+};
+
+function stripHtml(html: string): string {
+	let content = html;
+	let previous: string;
+	do {
+		previous = content;
+		content = content.replace(/<[^>]+>/gi, '');
+	} while (content !== previous);
+	return content;
+}
+
+function formatResponse(data: SearXngResponse, numResults: number): string {
+	const results = data.results ?? [];
+	if (results.length) {
+		return results
+			.slice(0, numResults)
+			.map((result) =>
+				JSON.stringify({
+					title: result.title ?? '',
+					link: result.url ?? '',
+					snippet: result.content ?? '',
+				}),
+			)
+			.join(',');
+	}
+
+	if (data.answers?.length) return data.answers[0];
+	if (data.infoboxes?.length) return stripHtml(data.infoboxes[0]?.content ?? '');
+	if (data.suggestions?.length) return `Suggestions: ${data.suggestions.join(', ')}`;
+
+	return 'No good results found.';
+}
+
+async function getTool(ctx: ISupplyDataFunctions | IExecuteFunctions, itemIndex: number) {
+	const credentials = await ctx.getCredentials<{ apiUrl: string }>('searXngApi');
+	const options = ctx.getNodeParameter('options', itemIndex) as Options;
+
+	const apiBase = credentials.apiUrl.replace(/\/+$/, '');
+	const numResults = options.numResults ?? 10;
+
+	const qs: IDataObject = {
+		format: 'json',
+		pageno: options.pageNumber ?? 1,
+		safesearch: options.safesearch ?? 0,
+	};
+	if (options.language) qs.language = options.language;
+
+	return new DynamicTool({
+		name: 'searxng-search',
+		description:
+			'A meta search engine. Useful for when you need to answer questions about current events. Input should be a search query. Output is a JSON array of the query results',
+		func: async (query: string) => {
+			// Routed through the node request helper so outbound policy applies.
+			const response = (await ctx.helpers.httpRequest({
+				method: 'POST',
+				url: `${apiBase}/search`,
+				qs: { q: query, ...qs },
+				headers: { Accept: 'application/json' },
+				json: true,
+				// Search responses are short-lived; don't let a hung instance
+				// stall the agent turn for the transport default (5 minutes).
+				timeout: 15_000,
+			})) as SearXngResponse;
+
+			return formatResponse(response, numResults);
+		},
+	});
+}
 
 export class ToolSearXng implements INodeType {
 	description: INodeTypeDescription = {
@@ -107,19 +184,35 @@ export class ToolSearXng implements INodeType {
 	};
 
 	async supplyData(this: ISupplyDataFunctions, itemIndex: number): Promise<SupplyData> {
-		const credentials = await this.getCredentials<{ apiUrl: string }>('searXngApi');
-		const options = this.getNodeParameter('options', itemIndex) as Options;
-
-		const tool = new SearxngSearch({
-			apiBase: credentials.apiUrl,
-			headers: {
-				Accept: 'application/json',
-			},
-			params: options,
-		});
-
 		return {
-			response: logWrapper(tool, this),
+			response: logWrapper(await getTool(this, itemIndex), this),
 		};
+	}
+
+	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
+		const result: INodeExecutionData[] = [];
+		const input = this.getInputData();
+		for (let i = 0; i < input.length; i++) {
+			const item = input[i];
+			const tool = await getTool(this, i);
+
+			const query = item.json.input;
+			if (typeof query !== 'string' || query === '') {
+				throw new NodeOperationError(this.getNode(), 'Input item is missing', {
+					itemIndex: i,
+				});
+			}
+
+			result.push({
+				json: {
+					response: await tool.invoke(query),
+				},
+				pairedItem: {
+					item: i,
+				},
+			});
+		}
+
+		return [result];
 	}
 }

@@ -6,6 +6,8 @@ export const arrayMethods: NativeDoc = {
 		length: {
 			doc: {
 				name: 'length',
+				aliases: ['size', 'count'],
+				aliasMode: 'exact',
 				description: 'The number of elements in the array',
 				examples: [{ example: "['Bob', 'Bill', 'Nat'].length", evaluated: '3' }],
 				docURL:
@@ -18,6 +20,7 @@ export const arrayMethods: NativeDoc = {
 		concat: {
 			doc: {
 				name: 'concat',
+				aliases: ['extend'],
 				description: 'Joins one or more arrays onto the end of the base array',
 				examples: [
 					{
@@ -77,7 +80,7 @@ export const arrayMethods: NativeDoc = {
 					{
 						name: 'function',
 						description:
-							'A function to run for each array element. If it returns <code>true</code>, the element will be kept. Consider using <a target="_blank" href=”https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Functions/Arrow_functions”>arrow function notation</a> to save space.',
+							'A function to run for each array element. If it returns <code>true</code>, the element will be kept. Consider using <a target="_blank" href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Functions/Arrow_functions">arrow function notation</a> to save space.',
 						type: 'Function',
 						default: 'item => true',
 						args: [
@@ -140,7 +143,7 @@ export const arrayMethods: NativeDoc = {
 					{
 						name: 'function',
 						description:
-							'A function to run for each array element. As soon as it returns <code>true</code>, that element will be returned. Consider using <a target="_blank" href=”https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Functions/Arrow_functions”>arrow function notation</a> to save space.',
+							'A function to run for each array element. As soon as it returns <code>true</code>, that element will be returned. Consider using <a target="_blank" href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Functions/Arrow_functions">arrow function notation</a> to save space.',
 						type: 'Function',
 						default: 'item => true',
 						args: [
@@ -239,6 +242,7 @@ export const arrayMethods: NativeDoc = {
 		includes: {
 			doc: {
 				name: 'includes',
+				aliases: ['contains', 'has'],
 				description: 'Returns <code>true</code> if the array contains the specified element',
 				examples: [
 					{ example: "['Bob', 'Bill', 'Nat'].includes('Nat')", evaluated: 'true' },
@@ -316,7 +320,7 @@ export const arrayMethods: NativeDoc = {
 					{
 						name: 'function',
 						description:
-							'A function to run for each array element. In the new array, the output of this function takes the place of the element. Consider using <a target="_blank" href=”https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Functions/Arrow_functions”>arrow function notation</a> to save space.',
+							'A function to run for each array element. In the new array, the output of this function takes the place of the element. Consider using <a target="_blank" href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Functions/Arrow_functions">arrow function notation</a> to save space.',
 						type: 'Function',
 						default: 'item => item',
 						args: [
@@ -352,7 +356,7 @@ export const arrayMethods: NativeDoc = {
 		reverse: {
 			doc: {
 				name: 'reverse',
-				description: 'Reverses the order of the elements in the array',
+				description: 'Returns a new array with the elements in reverse order',
 				examples: [
 					{ example: "['dog', 'bites', 'man'].reverse()", evaluated: "['man', 'bites', 'dog']" },
 				],
@@ -373,7 +377,7 @@ export const arrayMethods: NativeDoc = {
 					{
 						name: 'function',
 						description:
-							'A function to run for each array element. Takes the accumulated result and the current element, and returns a new accumulated result. Consider using <a target="_blank" href=”https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Functions/Arrow_functions”>arrow function notation</a> to save space.',
+							'A function to run for each array element. Takes the accumulated result and the current element, and returns a new accumulated result. Consider using <a target="_blank" href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Functions/Arrow_functions">arrow function notation</a> to save space.',
 						type: 'Function',
 						default: 'item => item',
 						args: [
@@ -418,6 +422,7 @@ export const arrayMethods: NativeDoc = {
 				description:
 					'Returns a portion of the array, from the <code>start</code> index up to (but not including) the <code>end</code> index. Indexes start at 0.',
 				examples: [
+					{ example: '[1, 2, 3, 4, 5].slice(0, -1)', evaluated: '[1, 2, 3, 4]' },
 					{ example: '[1, 2, 3, 4, 5].slice(2, 4)', evaluated: '[3, 4]' },
 					{ example: '[1, 2, 3, 4, 5].slice(2)', evaluated: '[3, 4, 5]' },
 					{ example: '[1, 2, 3, 4, 5].slice(-2)', evaluated: '[4, 5]' },
@@ -536,6 +541,7 @@ export const arrayMethods: NativeDoc = {
 		toSpliced: {
 			doc: {
 				name: 'toSpliced',
+				aliases: ['insertAt', 'removeAt'],
 				description:
 					'Adds and/or removes array elements at a given position. \n\nSee also <code>slice()</code> and <code>append()</code>.',
 				examples: [

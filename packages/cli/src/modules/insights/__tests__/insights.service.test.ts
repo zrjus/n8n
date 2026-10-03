@@ -1,918 +1,1180 @@
-import type { InsightsDateRange } from '@n8n/api-types';
 import type { LicenseState } from '@n8n/backend-common';
-import {
-	mockLogger,
-	createTeamProject,
-	createWorkflow,
-	testDb,
-	testModules,
-} from '@n8n/backend-test-utils';
-import type { Project, WorkflowEntity, IWorkflowDb } from '@n8n/db';
-import type { WorkflowExecuteAfterContext } from '@n8n/decorators';
-import { Container } from '@n8n/di';
-import type { MockProxy } from 'jest-mock-extended';
-import { mock } from 'jest-mock-extended';
-import { DateTime } from 'luxon';
+import { mockLogger } from '@n8n/backend-test-utils';
+import type { User } from '@n8n/db';
 import type { InstanceSettings } from 'n8n-core';
-import type { IRun } from 'n8n-workflow';
+import type { MockProxy } from 'vitest-mock-extended';
+import { mock } from 'vitest-mock-extended';
 
-import {
-	createCompactedInsightsEvent,
-	createMetadata,
-	createRawInsightsEvents,
-} from '../database/entities/__tests__/db-utils';
-import type { InsightsRaw } from '../database/entities/insights-raw';
+import { userHasScopes } from '@/permissions.ee/check-access';
+import type { WorkflowSharingService } from '@n8n/backend-services';
+
+import { TypeToNumber, type TypeUnitNumber } from '../database/entities/insights-shared';
 import type { InsightsByPeriodRepository } from '../database/repositories/insights-by-period.repository';
-import { InsightsCollectionService } from '../insights-collection.service';
-import { InsightsCompactionService } from '../insights-compaction.service';
-import type { InsightsPruningService } from '../insights-pruning.service';
-import { InsightsConfig } from '../insights.config';
 import { InsightsService } from '../insights.service';
 
-beforeAll(async () => {
-	await testModules.loadModules(['insights']);
-	await testDb.init();
-});
+vi.mock('@/permissions.ee/check-access', () => ({
+	userHasScopes: vi.fn(),
+}));
 
-beforeEach(async () => {
-	await testDb.truncate([
-		'InsightsRaw',
-		'InsightsByPeriod',
-		'InsightsMetadata',
-		'WorkflowEntity',
-		'Project',
-	]);
-});
+const user = mock<User>({ id: 'user-1' });
 
-// Terminate DB once after all tests complete
-afterAll(async () => {
-	await testDb.terminate();
-});
-
-describe('startTimers', () => {
+describe('InsightsService', () => {
 	let insightsService: InsightsService;
-	let compactionService: InsightsCompactionService;
-	let collectionService: InsightsCollectionService;
-	let pruningService: InsightsPruningService;
-	let instanceSettings: MockProxy<InstanceSettings>;
+
+	let mockInsightsByPeriodRepository: MockProxy<InsightsByPeriodRepository>;
+	let mockLicenseState: MockProxy<LicenseState>;
+	let mockInstanceSettings: MockProxy<InstanceSettings>;
+	let mockWorkflowSharingService: MockProxy<WorkflowSharingService>;
 
 	beforeEach(() => {
-		compactionService = mock<InsightsCompactionService>();
-		collectionService = mock<InsightsCollectionService>();
-		pruningService = mock<InsightsPruningService>();
-		instanceSettings = mock<InstanceSettings>({
-			instanceType: 'main',
-		});
+		vi.clearAllMocks();
+
+		mockInsightsByPeriodRepository = mock<InsightsByPeriodRepository>();
+		mockLicenseState = mock<LicenseState>();
+		mockInstanceSettings = mock<InstanceSettings>();
+		mockWorkflowSharingService = mock<WorkflowSharingService>();
+		vi.mocked(userHasScopes).mockResolvedValue(true);
+
 		insightsService = new InsightsService(
-			mock<InsightsByPeriodRepository>(),
-			compactionService,
-			collectionService,
-			pruningService,
-			mock<LicenseState>(),
-			instanceSettings,
+			mockInsightsByPeriodRepository,
+			mockLicenseState,
+			mockInstanceSettings,
 			mockLogger(),
+			mockWorkflowSharingService,
 		);
-
-		jest.clearAllMocks();
 	});
 
-	const setupMocks = (
-		instanceType: string,
-		isLeader: boolean = false,
-		isPruningEnabled: boolean = false,
-	) => {
-		(instanceSettings as any).instanceType = instanceType;
-		Object.defineProperty(instanceSettings, 'isLeader', {
-			get: jest.fn(() => isLeader),
-		});
-		Object.defineProperty(pruningService, 'isPruningEnabled', {
-			get: jest.fn(() => isPruningEnabled),
-		});
-	};
+	describe('getInsightsSummary', () => {
+		const startDate = new Date('2024-01-01');
+		const endDate = new Date('2024-01-07');
 
-	test('starts flushing timer for main instance', () => {
-		setupMocks('main', false, false);
-		insightsService.startTimers();
+		it('should return complete summary with all metrics', async () => {
+			mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue([
+				{ period: 'current', type: TypeToNumber.success, total_value: 8 },
+				{ period: 'current', type: TypeToNumber.failure, total_value: 12 },
+				{ period: 'current', type: TypeToNumber.runtime_ms, total_value: 4000 },
+				{ period: 'current', type: TypeToNumber.time_saved_min, total_value: 120 },
+				{ period: 'previous', type: TypeToNumber.success, total_value: 14 },
+				{ period: 'previous', type: TypeToNumber.failure, total_value: 6 },
+				{ period: 'previous', type: TypeToNumber.runtime_ms, total_value: 6000 },
+				{ period: 'previous', type: TypeToNumber.time_saved_min, total_value: 80 },
+			]);
 
-		expect(collectionService.startFlushingTimer).toHaveBeenCalled();
-		expect(compactionService.startCompactionTimer).not.toHaveBeenCalled();
-		expect(pruningService.startPruningTimer).not.toHaveBeenCalled();
-	});
-
-	test('starts compaction and flushing timers for main leader instances', () => {
-		setupMocks('main', true, false);
-		insightsService.startTimers();
-
-		expect(collectionService.startFlushingTimer).toHaveBeenCalled();
-		expect(compactionService.startCompactionTimer).toHaveBeenCalled();
-		expect(pruningService.startPruningTimer).not.toHaveBeenCalled();
-	});
-
-	test('starts compaction, flushing and pruning timers for main leader instance with pruning enabled', () => {
-		setupMocks('main', true, true);
-		insightsService.startTimers();
-
-		expect(collectionService.startFlushingTimer).toHaveBeenCalled();
-		expect(compactionService.startCompactionTimer).toHaveBeenCalled();
-		expect(pruningService.startPruningTimer).toHaveBeenCalled();
-	});
-
-	test('starts only collection flushing timer for webhook instance', () => {
-		setupMocks('webhook', false, false);
-		insightsService.startTimers();
-
-		expect(collectionService.startFlushingTimer).toHaveBeenCalled();
-		expect(compactionService.startCompactionTimer).not.toHaveBeenCalled();
-		expect(pruningService.startPruningTimer).not.toHaveBeenCalled();
-	});
-});
-
-describe('getInsightsSummary', () => {
-	let insightsService: InsightsService;
-	beforeAll(async () => {
-		insightsService = Container.get(InsightsService);
-	});
-
-	let project: Project;
-	let workflow: IWorkflowDb & WorkflowEntity;
-
-	beforeEach(async () => {
-		project = await createTeamProject();
-		workflow = await createWorkflow({}, project);
-	});
-
-	test('compacted data are summarized correctly', async () => {
-		// ARRANGE
-		// last 6 days
-		await createCompactedInsightsEvent(workflow, {
-			type: 'success',
-			value: 1,
-			periodUnit: 'day',
-			periodStart: DateTime.utc(),
-		});
-		await createCompactedInsightsEvent(workflow, {
-			type: 'success',
-			value: 1,
-			periodUnit: 'day',
-			periodStart: DateTime.utc().minus({ day: 2 }),
-		});
-		await createCompactedInsightsEvent(workflow, {
-			type: 'failure',
-			value: 1,
-			periodUnit: 'day',
-			periodStart: DateTime.utc(),
-		});
-		// last 12 days
-		await createCompactedInsightsEvent(workflow, {
-			type: 'success',
-			value: 1,
-			periodUnit: 'day',
-			periodStart: DateTime.utc().minus({ days: 10 }),
-		});
-		await createCompactedInsightsEvent(workflow, {
-			type: 'runtime_ms',
-			value: 123,
-			periodUnit: 'day',
-			periodStart: DateTime.utc().minus({ days: 10 }),
-		});
-		//Outside range should not be taken into account
-		await createCompactedInsightsEvent(workflow, {
-			type: 'runtime_ms',
-			value: 123,
-			periodUnit: 'day',
-			periodStart: DateTime.utc().minus({ days: 13 }),
-		});
-
-		// ACT
-		const summary = await insightsService.getInsightsSummary({ periodLengthInDays: 6 });
-
-		// ASSERT
-		expect(summary).toEqual({
-			averageRunTime: { deviation: -123, unit: 'millisecond', value: 0 },
-			failed: { deviation: 1, unit: 'count', value: 1 },
-			failureRate: { deviation: 0.333, unit: 'ratio', value: 0.333 },
-			timeSaved: { deviation: 0, unit: 'minute', value: 0 },
-			total: { deviation: 2, unit: 'count', value: 3 },
-		});
-	});
-
-	test('no data for previous period should return null deviation', async () => {
-		// ARRANGE
-		// last 7 days
-		await createCompactedInsightsEvent(workflow, {
-			type: 'success',
-			value: 1,
-			periodUnit: 'day',
-			periodStart: DateTime.utc(),
-		});
-
-		// ACT
-		const summary = await insightsService.getInsightsSummary({ periodLengthInDays: 7 });
-
-		// ASSERT
-		expect(Object.values(summary).map((v) => v.deviation)).toEqual([null, null, null, null, null]);
-	});
-
-	test('mixed period data are summarized correctly', async () => {
-		// ARRANGE
-		await createCompactedInsightsEvent(workflow, {
-			type: 'success',
-			value: 1,
-			periodUnit: 'hour',
-			periodStart: DateTime.utc(),
-		});
-		await createCompactedInsightsEvent(workflow, {
-			type: 'success',
-			value: 1,
-			periodUnit: 'day',
-			periodStart: DateTime.utc().minus({ day: 1 }),
-		});
-		await createCompactedInsightsEvent(workflow, {
-			type: 'failure',
-			value: 2,
-			periodUnit: 'day',
-			periodStart: DateTime.utc(),
-		});
-		await createCompactedInsightsEvent(workflow, {
-			type: 'success',
-			value: 2,
-			periodUnit: 'hour',
-			periodStart: DateTime.utc().minus({ day: 10 }),
-		});
-		await createCompactedInsightsEvent(workflow, {
-			type: 'success',
-			value: 3,
-			periodUnit: 'day',
-			periodStart: DateTime.utc().minus({ day: 11 }),
-		});
-
-		// ACT
-		const summary = await insightsService.getInsightsSummary({ periodLengthInDays: 7 });
-
-		// ASSERT
-		expect(summary).toEqual({
-			averageRunTime: { deviation: 0, unit: 'millisecond', value: 0 },
-			failed: { deviation: 2, unit: 'count', value: 2 },
-			failureRate: { deviation: 0.5, unit: 'ratio', value: 0.5 },
-			timeSaved: { deviation: 0, unit: 'minute', value: 0 },
-			total: { deviation: -1, unit: 'count', value: 4 },
-		});
-	});
-});
-
-describe('getInsightsByWorkflow', () => {
-	let insightsService: InsightsService;
-	beforeAll(async () => {
-		insightsService = Container.get(InsightsService);
-	});
-
-	let project: Project;
-	let workflow1: IWorkflowDb & WorkflowEntity;
-	let workflow2: IWorkflowDb & WorkflowEntity;
-	let workflow3: IWorkflowDb & WorkflowEntity;
-
-	beforeEach(async () => {
-		project = await createTeamProject();
-		workflow1 = await createWorkflow({}, project);
-		workflow2 = await createWorkflow({}, project);
-		workflow3 = await createWorkflow({}, project);
-	});
-
-	test('compacted data are are grouped by workflow correctly', async () => {
-		// ARRANGE
-		for (const workflow of [workflow1, workflow2]) {
-			await createCompactedInsightsEvent(workflow, {
-				type: 'success',
-				value: workflow === workflow1 ? 1 : 2,
-				periodUnit: 'day',
-				periodStart: DateTime.utc(),
-			});
-			await createCompactedInsightsEvent(workflow, {
-				type: 'success',
-				value: 1,
-				periodUnit: 'day',
-				periodStart: DateTime.utc().minus({ day: 2 }),
-			});
-			await createCompactedInsightsEvent(workflow, {
-				type: 'failure',
-				value: 2,
-				periodUnit: 'day',
-				periodStart: DateTime.utc(),
-			});
-			// last 14 days
-			await createCompactedInsightsEvent(workflow, {
-				type: 'success',
-				value: 1,
-				periodUnit: 'day',
-				periodStart: DateTime.utc().minus({ days: 10 }),
-			});
-			await createCompactedInsightsEvent(workflow, {
-				type: 'runtime_ms',
-				value: 123,
-				periodUnit: 'day',
-				periodStart: DateTime.utc().minus({ days: 10 }),
+			const result = await insightsService.getInsightsSummary({
+				user,
+				startDate,
+				endDate,
 			});
 
-			// Barely in range insight (should be included)
-			// 1 hour before 14 days ago
-			await createCompactedInsightsEvent(workflow, {
-				type: 'success',
-				value: 1,
-				periodUnit: 'hour',
-				periodStart: DateTime.utc().minus({ days: 13, hours: 23 }),
+			expect(result).toEqual({
+				averageRunTime: {
+					value: 200,
+					unit: 'millisecond',
+					deviation: -100,
+				},
+				failed: {
+					value: 12,
+					unit: 'count',
+					deviation: 6,
+				},
+				failureRate: {
+					value: 0.6,
+					unit: 'ratio',
+					deviation: 0.3,
+				},
+				timeSaved: {
+					value: 120,
+					unit: 'minute',
+					deviation: 40,
+				},
+				total: {
+					value: 20,
+					unit: 'count',
+					deviation: 0,
+				},
 			});
-
-			// Out of date range insight (should not be included)
-			// 14 days ago
-			await createCompactedInsightsEvent(workflow, {
-				type: 'success',
-				value: 1,
-				periodUnit: 'day',
-				periodStart: DateTime.utc().minus({ days: 14 }),
-			});
-		}
-
-		// ACT
-		const byWorkflow = await insightsService.getInsightsByWorkflow({
-			maxAgeInDays: 14,
 		});
 
-		// ASSERT
-		expect(byWorkflow.count).toEqual(2);
-		expect(byWorkflow.data).toHaveLength(2);
+		const createMockAggregates = (config: {
+			currentRuntime?: number;
+			currentSuccess?: number;
+			currentFailure?: number;
+			currentTimeSaved?: number;
+			previousRuntime?: number;
+			previousSuccess?: number;
+			previousFailure?: number;
+			previousTimeSaved?: number;
+		}) => {
+			const aggregates: Array<{
+				period: 'previous' | 'current';
+				type: TypeUnitNumber;
+				total_value: string | number;
+			}> = [];
 
-		// expect first workflow to be workflow 2, because it has a bigger total (default sorting)
-		expect(byWorkflow.data[0]).toMatchObject({
-			workflowId: workflow2.id,
-			workflowName: workflow2.name,
-			projectId: project.id,
-			projectName: project.name,
-			total: 7,
+			if (config.previousSuccess !== undefined) {
+				aggregates.push({
+					period: 'previous',
+					type: TypeToNumber.success,
+					total_value: config.previousSuccess,
+				});
+			}
+
+			if (config.previousFailure !== undefined) {
+				aggregates.push({
+					period: 'previous',
+					type: TypeToNumber.failure,
+					total_value: config.previousFailure,
+				});
+			}
+
+			if (config.previousRuntime !== undefined) {
+				aggregates.push({
+					period: 'previous',
+					type: TypeToNumber.runtime_ms,
+					total_value: config.previousRuntime,
+				});
+			}
+
+			if (config.previousTimeSaved !== undefined) {
+				aggregates.push({
+					period: 'previous',
+					type: TypeToNumber.time_saved_min,
+					total_value: config.previousTimeSaved,
+				});
+			}
+
+			if (config.currentSuccess !== undefined) {
+				aggregates.push({
+					period: 'current',
+					type: TypeToNumber.success,
+					total_value: config.currentSuccess,
+				});
+			}
+
+			if (config.currentFailure !== undefined) {
+				aggregates.push({
+					period: 'current',
+					type: TypeToNumber.failure,
+					total_value: config.currentFailure,
+				});
+			}
+
+			if (config.currentRuntime !== undefined) {
+				aggregates.push({
+					period: 'current',
+					type: TypeToNumber.runtime_ms,
+					total_value: config.currentRuntime,
+				});
+			}
+
+			if (config.currentTimeSaved !== undefined) {
+				aggregates.push({
+					period: 'current',
+					type: TypeToNumber.time_saved_min,
+					total_value: config.currentTimeSaved,
+				});
+			}
+
+			return aggregates;
+		};
+
+		describe('average runtime', () => {
+			describe('Core Calculation Logic', () => {
+				it('should calculate average from total runtime and execution count', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 2,
+							currentFailure: 1,
+							currentRuntime: 600,
+							currentTimeSaved: 50,
+							previousSuccess: 1,
+							previousFailure: 1,
+							previousRuntime: 400,
+							previousTimeSaved: 25,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.averageRunTime).toEqual({
+						value: 200,
+						unit: 'millisecond',
+						deviation: 0,
+					});
+				});
+
+				it('should calculate average runtime with success only', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 2,
+							currentRuntime: 1600,
+							previousSuccess: 5,
+							previousRuntime: 2000,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.averageRunTime).toEqual({
+						value: 800,
+						unit: 'millisecond',
+						deviation: 400,
+					});
+				});
+
+				it('should calculate average runtime with failure only', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentFailure: 2,
+							currentRuntime: 1000,
+							previousFailure: 1,
+							previousRuntime: 1200,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.averageRunTime).toEqual({
+						value: 500,
+						unit: 'millisecond',
+						deviation: -700,
+					});
+				});
+
+				it('should calculate average runtime with decimal values', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 3,
+							currentFailure: 0,
+							currentRuntime: 410,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					// Current: 410ms / 3 executions = 136.666... rounded to 136.67
+					expect(result.averageRunTime).toEqual({
+						value: 136.67,
+						unit: 'millisecond',
+						deviation: null,
+					});
+				});
+			});
+
+			describe('Zero/Null Handling', () => {
+				it('returns 0 when no executions exist', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 0,
+							currentFailure: 0,
+							currentRuntime: 0,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.averageRunTime).toEqual({
+						value: 0,
+						unit: 'millisecond',
+						deviation: null,
+					});
+				});
+
+				it('returns 0 when runtime data is null/undefined', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 5,
+							currentFailure: 2,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.averageRunTime).toEqual({
+						value: 0,
+						unit: 'millisecond',
+						deviation: null,
+					});
+				});
+
+				it('returns 0 when total runtime is 0', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 10,
+							currentFailure: 5,
+							currentRuntime: 0,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.averageRunTime).toEqual({
+						value: 0,
+						unit: 'millisecond',
+						deviation: null,
+					});
+				});
+
+				it('returns null deviation when previous period has no executions', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 5,
+							currentFailure: 5,
+							currentRuntime: 1000,
+							previousSuccess: 0,
+							previousFailure: 0,
+							previousRuntime: 0,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.averageRunTime).toEqual({
+						value: 100,
+						unit: 'millisecond',
+						deviation: null,
+					});
+				});
+			});
+		});
+
+		describe('failure rate', () => {
+			describe('Core Calculation Logic', () => {
+				it('should calculate failure rate from failures and total executions', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 6,
+							currentFailure: 4,
+							previousSuccess: 8,
+							previousFailure: 2,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.failureRate).toEqual({
+						value: 0.4,
+						unit: 'ratio',
+						deviation: 0.2,
+					});
+				});
+
+				it('should handle decimal values with 3 decimal rounding', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 5,
+							currentFailure: 2,
+							previousSuccess: 8,
+							previousFailure: 1,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					// Current: 2 / 7 = 0.285714... rounded to 0.286
+					// Previous: 1 / 9 = 0.111111... rounded to 0.111
+					expect(result.failureRate).toEqual({
+						value: 0.286,
+						unit: 'ratio',
+						deviation: 0.175,
+					});
+				});
+
+				it('should calculate 0% failure rate with only successes', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 10,
+							currentFailure: 0,
+							previousSuccess: 5,
+							previousFailure: 0,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.failureRate).toEqual({
+						value: 0,
+						unit: 'ratio',
+						deviation: 0,
+					});
+				});
+
+				it('should calculate 100% failure rate with only failures', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 0,
+							currentFailure: 5,
+							previousSuccess: 0,
+							previousFailure: 3,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.failureRate).toEqual({
+						value: 1,
+						unit: 'ratio',
+						deviation: 0,
+					});
+				});
+			});
+
+			describe('Zero/Null Handling', () => {
+				it('returns 0 when no executions exist', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 0,
+							currentFailure: 0,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.failureRate).toEqual({
+						value: 0,
+						unit: 'ratio',
+						deviation: null,
+					});
+				});
+
+				it('returns 0 when failure data is null/undefined', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 5,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.failureRate).toEqual({
+						value: 0,
+						unit: 'ratio',
+						deviation: null,
+					});
+				});
+
+				it('handles all failures correctly', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 0,
+							currentFailure: 10,
+							previousSuccess: 0,
+							previousFailure: 5,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.failureRate).toEqual({
+						value: 1,
+						unit: 'ratio',
+						deviation: 0,
+					});
+				});
+
+				it('returns null deviation when previous period has no executions', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 7,
+							currentFailure: 3,
+							previousSuccess: 0,
+							previousFailure: 0,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.failureRate.value).toBe(0.3);
+					expect(result.failureRate.deviation).toBeNull();
+				});
+			});
+		});
+
+		describe('failed', () => {
+			describe('Core Logic', () => {
+				it('should extract failure count correctly', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 10,
+							currentFailure: 5,
+							previousSuccess: 8,
+							previousFailure: 3,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.failed).toEqual({
+						value: 5,
+						unit: 'count',
+						deviation: 2,
+					});
+				});
+
+				it('should calculate deviation with previous period data', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 5,
+							currentFailure: 15,
+							previousSuccess: 10,
+							previousFailure: 20,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.failed).toEqual({
+						value: 15,
+						unit: 'count',
+						deviation: -5,
+					});
+				});
+			});
+
+			describe('Zero/Null Handling', () => {
+				it('returns 0 when no failures exist', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 10,
+							currentFailure: 0,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.failed).toEqual({
+						value: 0,
+						unit: 'count',
+						deviation: null,
+					});
+				});
+
+				it('returns null deviation when previous period has no executions', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 5,
+							currentFailure: 3,
+							previousSuccess: 0,
+							previousFailure: 0,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.failed.value).toBe(3);
+					expect(result.failed.deviation).toBeNull();
+				});
+			});
+		});
+
+		describe('total', () => {
+			describe('Core Logic', () => {
+				it('should sum success and failure counts correctly', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 12,
+							currentFailure: 8,
+							previousSuccess: 10,
+							previousFailure: 5,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.total).toEqual({
+						value: 20,
+						unit: 'count',
+						deviation: 5,
+					});
+				});
+
+				it('should calculate deviation with previous period data', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 5,
+							currentFailure: 5,
+							previousSuccess: 15,
+							previousFailure: 10,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.total).toEqual({
+						value: 10,
+						unit: 'count',
+						deviation: -15,
+					});
+				});
+			});
+
+			describe('Zero/Null Handling', () => {
+				it('returns 0 when no executions exist', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 0,
+							currentFailure: 0,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.total).toEqual({
+						value: 0,
+						unit: 'count',
+						deviation: null,
+					});
+				});
+
+				it('returns null deviation when previous period has no executions', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 10,
+							currentFailure: 5,
+							previousSuccess: 0,
+							previousFailure: 0,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.total.value).toBe(15);
+					expect(result.total.deviation).toBeNull();
+				});
+			});
+		});
+
+		describe('time saved', () => {
+			describe('Core Logic', () => {
+				it('should extract time saved value correctly', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 10,
+							currentTimeSaved: 150,
+							previousSuccess: 8,
+							previousTimeSaved: 100,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.timeSaved).toEqual({
+						value: 150,
+						unit: 'minute',
+						deviation: 50,
+					});
+				});
+
+				it('should calculate deviation with previous period data', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 5,
+							currentTimeSaved: 75,
+							previousSuccess: 10,
+							previousTimeSaved: 200,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.timeSaved).toEqual({
+						value: 75,
+						unit: 'minute',
+						deviation: -125,
+					});
+				});
+			});
+
+			describe('Zero/Null Handling', () => {
+				it('returns 0 when no time saved data exists', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 10,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.timeSaved).toEqual({
+						value: 0,
+						unit: 'minute',
+						deviation: null,
+					});
+				});
+
+				it('returns null deviation when previous period has no executions', async () => {
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+						createMockAggregates({
+							currentSuccess: 10,
+							currentTimeSaved: 120,
+							previousSuccess: 0,
+							previousFailure: 0,
+						}),
+					);
+
+					const result = await insightsService.getInsightsSummary({
+						user,
+						startDate,
+						endDate,
+					});
+
+					expect(result.timeSaved.value).toBe(120);
+					expect(result.timeSaved.deviation).toBeNull();
+				});
+			});
+		});
+
+		it('does not expose stored billable aggregates on the summary', async () => {
+			mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+				createMockAggregates({
+					currentSuccess: 8,
+					currentFailure: 4,
+					previousSuccess: 6,
+					previousFailure: 2,
+				}).concat([
+					{ period: 'current', type: TypeToNumber.billable, total_value: 10 },
+					{ period: 'previous', type: TypeToNumber.billable, total_value: 7 },
+				]),
+			);
+
+			const result = await insightsService.getInsightsSummary({
+				user,
+				startDate,
+				endDate,
+			});
+
+			expect(result.total).toEqual({
+				value: 12,
+				unit: 'count',
+				deviation: 4,
+			});
+			expect(result).not.toHaveProperty('billable');
+		});
+
+		describe('project access', () => {
+			beforeEach(() => {
+				mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+					[],
+				);
+			});
+
+			it('should not check project access when no project is requested', async () => {
+				await insightsService.getInsightsSummary({ user, startDate, endDate });
+
+				expect(userHasScopes).not.toHaveBeenCalled();
+			});
+
+			it('should throw a forbidden error when the requested project is not accessible', async () => {
+				vi.mocked(userHasScopes).mockResolvedValue(false);
+
+				await expect(
+					insightsService.getInsightsSummary({ user, startDate, endDate, projectId: 'project-1' }),
+				).rejects.toThrow('You do not have access to insights for this project.');
+
+				expect(
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates,
+				).not.toHaveBeenCalled();
+			});
+
+			it('should query the requested project when it is accessible', async () => {
+				await insightsService.getInsightsSummary({
+					user,
+					startDate,
+					endDate,
+					projectId: 'project-1',
+				});
+
+				expect(userHasScopes).toHaveBeenCalledWith(user, ['workflow:read'], false, {
+					projectId: 'project-1',
+				});
+				expect(
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates,
+				).toHaveBeenCalledWith(expect.objectContaining({ projectId: 'project-1' }));
+			});
+
+			it('should query without an access filter for users with the global workflow read scope', async () => {
+				mockWorkflowSharingService.rolesGrantingScope.mockResolvedValue(undefined);
+
+				await insightsService.getInsightsSummary({ user, startDate, endDate });
+
+				expect(
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates,
+				).toHaveBeenCalledWith(expect.objectContaining({ accessFilter: undefined }));
+			});
+
+			it('should query with an access filter for users without the global workflow read scope', async () => {
+				mockWorkflowSharingService.rolesGrantingScope.mockResolvedValue({
+					projectRoles: ['project:viewer'],
+					workflowRoles: ['workflow:owner'],
+				});
+
+				await insightsService.getInsightsSummary({ user, startDate, endDate });
+
+				expect(
+					mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates,
+				).toHaveBeenCalledWith(
+					expect.objectContaining({
+						accessFilter: {
+							user,
+							projectRoles: ['project:viewer'],
+							workflowRoles: ['workflow:owner'],
+						},
+					}),
+				);
+			});
+		});
+	});
+
+	describe('timeZone forwarding', () => {
+		const startDate = new Date('2024-01-01');
+		const endDate = new Date('2024-01-07');
+
+		it('forwards timeZone to getPreviousAndCurrentPeriodTypeAggregates', async () => {
+			mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates.mockResolvedValue(
+				[],
+			);
+
+			await insightsService.getInsightsSummary({
+				user,
+				startDate,
+				endDate,
+				timeZone: 'Europe/Berlin',
+			});
+
+			expect(
+				mockInsightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates,
+			).toHaveBeenCalledWith(expect.objectContaining({ timeZone: 'Europe/Berlin' }));
+		});
+
+		it('forwards timeZone to getInsightsByWorkflow', async () => {
+			mockInsightsByPeriodRepository.getInsightsByWorkflow.mockResolvedValue({
+				count: 0,
+				rows: [],
+			});
+			mockWorkflowSharingService.getSharedWorkflowIds.mockResolvedValue([]);
+
+			await insightsService.getInsightsByWorkflow({
+				user: mock<User>(),
+				startDate,
+				endDate,
+				timeZone: 'Europe/Berlin',
+			});
+
+			expect(mockInsightsByPeriodRepository.getInsightsByWorkflow).toHaveBeenCalledWith(
+				expect.objectContaining({ timeZone: 'Europe/Berlin' }),
+			);
+		});
+
+		it('forwards timeZone to getInsightsByTime', async () => {
+			mockInsightsByPeriodRepository.getInsightsByTime.mockResolvedValue([]);
+
+			await insightsService.getInsightsByTime({
+				user,
+				startDate,
+				endDate,
+				timeZone: 'Europe/Berlin',
+			});
+
+			expect(mockInsightsByPeriodRepository.getInsightsByTime).toHaveBeenCalledWith(
+				expect.objectContaining({ timeZone: 'Europe/Berlin' }),
+			);
+		});
+	});
+
+	describe('getInsightsByWorkflow', () => {
+		const startDate = new Date('2024-01-01');
+		const endDate = new Date('2024-01-07');
+
+		const makeRow = (workflowId: string | null) => ({
+			workflowId,
+			workflowName: workflowId ? `Workflow ${workflowId}` : 'Deleted workflow',
+			projectId: 'project-1',
+			projectName: 'Project 1',
+			total: 10,
+			succeeded: 8,
 			failed: 2,
-			runTime: 123,
-			succeeded: 5,
-			timeSaved: 0,
-		});
-		expect(byWorkflow.data[0].failureRate).toBeCloseTo(2 / 7);
-		expect(byWorkflow.data[0].averageRunTime).toBeCloseTo(123 / 7);
-
-		expect(byWorkflow.data[1]).toMatchObject({
-			workflowId: workflow1.id,
-			workflowName: workflow1.name,
-			projectId: project.id,
-			projectName: project.name,
-			total: 6,
-			failed: 2,
-			runTime: 123,
-			succeeded: 4,
-			timeSaved: 0,
-		});
-		expect(byWorkflow.data[1].failureRate).toBeCloseTo(2 / 6);
-		expect(byWorkflow.data[1].averageRunTime).toBeCloseTo(123 / 6);
-	});
-
-	test('compacted data are grouped by workflow correctly with sorting', async () => {
-		// ARRANGE
-		for (const workflow of [workflow1, workflow2]) {
-			await createCompactedInsightsEvent(workflow, {
-				type: 'success',
-				value: workflow === workflow1 ? 1 : 2,
-				periodUnit: 'day',
-				periodStart: DateTime.utc(),
-			});
-			await createCompactedInsightsEvent(workflow, {
-				type: 'failure',
-				value: 2,
-				periodUnit: 'day',
-				periodStart: DateTime.utc(),
-			});
-			await createCompactedInsightsEvent(workflow, {
-				type: 'runtime_ms',
-				value: workflow === workflow1 ? 2 : 1,
-				periodUnit: 'day',
-				periodStart: DateTime.utc().minus({ days: 10 }),
-			});
-		}
-
-		// ACT
-		const byWorkflow = await insightsService.getInsightsByWorkflow({
-			maxAgeInDays: 14,
-			sortBy: 'runTime:desc',
+			failureRate: 0.2,
+			runTime: 1000,
+			averageRunTime: 100,
+			timeSaved: 60,
 		});
 
-		// ASSERT
-		expect(byWorkflow.count).toEqual(2);
-		expect(byWorkflow.data).toHaveLength(2);
-		expect(byWorkflow.data[0].workflowId).toEqual(workflow1.id);
-	});
+		const makeUser = (scopes: string[]) =>
+			({ role: { scopes: scopes.map((slug) => ({ slug })) } }) as unknown as User;
 
-	test('compacted data are grouped by workflow correctly with pagination', async () => {
-		// ARRANGE
-		for (const workflow of [workflow1, workflow2, workflow3]) {
-			await createCompactedInsightsEvent(workflow, {
-				type: 'success',
-				value: workflow === workflow1 ? 1 : workflow === workflow2 ? 2 : 3,
-				periodUnit: 'day',
-				periodStart: DateTime.utc(),
+		beforeEach(() => {
+			mockInsightsByPeriodRepository.getInsightsByWorkflow.mockResolvedValue({
+				count: 0,
+				rows: [],
 			});
-		}
-
-		// ACT
-		const byWorkflow = await insightsService.getInsightsByWorkflow({
-			maxAgeInDays: 14,
-			sortBy: 'succeeded:desc',
-			skip: 1,
-			take: 1,
 		});
 
-		// ASSERT
-		expect(byWorkflow.count).toEqual(3);
-		expect(byWorkflow.data).toHaveLength(1);
-		expect(byWorkflow.data[0].workflowId).toEqual(workflow2.id);
-	});
-
-	test('compacted data are grouped by workflow correctly even with 0 data (check division by 0)', async () => {
-		// ACT
-		const byWorkflow = await insightsService.getInsightsByWorkflow({
-			maxAgeInDays: 14,
-		});
-
-		// ASSERT
-		expect(byWorkflow.count).toEqual(0);
-		expect(byWorkflow.data).toHaveLength(0);
-	});
-});
-
-describe('getInsightsByTime', () => {
-	let insightsService: InsightsService;
-	beforeAll(async () => {
-		insightsService = Container.get(InsightsService);
-	});
-
-	let project: Project;
-	let workflow1: IWorkflowDb & WorkflowEntity;
-	let workflow2: IWorkflowDb & WorkflowEntity;
-
-	beforeEach(async () => {
-		project = await createTeamProject();
-		workflow1 = await createWorkflow({}, project);
-		workflow2 = await createWorkflow({}, project);
-	});
-
-	test('returns empty array when no insights exist', async () => {
-		const byTime = await insightsService.getInsightsByTime({ maxAgeInDays: 14, periodUnit: 'day' });
-		expect(byTime).toEqual([]);
-	});
-
-	test('returns empty array when no insights in the time range exists', async () => {
-		await createCompactedInsightsEvent(workflow1, {
-			type: 'success',
-			value: 2,
-			periodUnit: 'day',
-			periodStart: DateTime.utc().minus({ days: 30 }),
-		});
-
-		const byTime = await insightsService.getInsightsByTime({ maxAgeInDays: 14, periodUnit: 'day' });
-		expect(byTime).toEqual([]);
-	});
-
-	test('compacted data are are grouped by time correctly', async () => {
-		// ARRANGE
-		for (const workflow of [workflow1, workflow2]) {
-			await createCompactedInsightsEvent(workflow, {
-				type: 'success',
-				value: workflow === workflow1 ? 1 : 2,
-				periodUnit: 'day',
-				periodStart: DateTime.utc(),
-			});
-			// Check that hourly data is grouped together with the previous daily data
-			await createCompactedInsightsEvent(workflow, {
-				type: 'failure',
-				value: 2,
-				periodUnit: 'hour',
-				periodStart: DateTime.utc(),
-			});
-			await createCompactedInsightsEvent(workflow, {
-				type: 'success',
-				value: 1,
-				periodUnit: 'day',
-				periodStart: DateTime.utc().minus({ day: 2 }),
-			});
-			await createCompactedInsightsEvent(workflow, {
-				type: 'success',
-				value: 1,
-				periodUnit: 'day',
-				periodStart: DateTime.utc().minus({ days: 10 }),
-			});
-			await createCompactedInsightsEvent(workflow, {
-				type: 'runtime_ms',
-				value: workflow === workflow1 ? 10 : 20,
-				periodUnit: 'day',
-				periodStart: DateTime.utc().minus({ days: 10 }),
+		it('sets hasReadAccess true for a row with a workflowId', async () => {
+			const user = makeUser([]);
+			mockInsightsByPeriodRepository.getInsightsByWorkflow.mockResolvedValue({
+				count: 1,
+				rows: [makeRow('wf-1')],
 			});
 
-			// Barely in range insight (should be included)
-			// 1 hour before 14 days ago
-			await createCompactedInsightsEvent(workflow, {
-				type: workflow === workflow1 ? 'success' : 'failure',
-				value: 1,
-				periodUnit: 'hour',
-				periodStart: DateTime.utc().minus({ days: 13, hours: 23 }),
+			const result = await insightsService.getInsightsByWorkflow({ user, startDate, endDate });
+
+			expect(result.data[0].hasReadAccess).toBe(true);
+		});
+
+		it('sets hasReadAccess false for a row with a null workflowId (deleted workflow)', async () => {
+			const user = makeUser(['workflow:read']);
+			mockInsightsByPeriodRepository.getInsightsByWorkflow.mockResolvedValue({
+				count: 1,
+				rows: [makeRow(null)],
 			});
 
-			// Out of date range insight (should not be included)
-			// 14 days ago
-			await createCompactedInsightsEvent(workflow, {
-				type: 'success',
-				value: 1,
-				periodUnit: 'day',
-				periodStart: DateTime.utc().minus({ days: 14 }),
+			const result = await insightsService.getInsightsByWorkflow({ user, startDate, endDate });
+
+			expect(result.data[0].hasReadAccess).toBe(false);
+		});
+
+		describe('project access', () => {
+			it('should not check project access when no project is requested', async () => {
+				await insightsService.getInsightsByWorkflow({ user, startDate, endDate });
+
+				expect(userHasScopes).not.toHaveBeenCalled();
 			});
-		}
 
-		// ACT
-		const byTime = await insightsService.getInsightsByTime({ maxAgeInDays: 14, periodUnit: 'day' });
+			it('should throw a forbidden error when the requested project is not accessible', async () => {
+				vi.mocked(userHasScopes).mockResolvedValue(false);
 
-		// ASSERT
-		expect(byTime).toHaveLength(4);
+				await expect(
+					insightsService.getInsightsByWorkflow({
+						user,
+						startDate,
+						endDate,
+						projectId: 'project-1',
+					}),
+				).rejects.toThrow('You do not have access to insights for this project.');
 
-		// expect date to be sorted by oldest first
-		expect(byTime[0].date).toEqual(DateTime.utc().minus({ days: 14 }).startOf('day').toISO());
-		expect(byTime[1].date).toEqual(DateTime.utc().minus({ days: 10 }).startOf('day').toISO());
-		expect(byTime[2].date).toEqual(DateTime.utc().minus({ days: 2 }).startOf('day').toISO());
-		expect(byTime[3].date).toEqual(DateTime.utc().startOf('day').toISO());
-
-		expect(byTime[0].values).toEqual({
-			total: 2,
-			succeeded: 1,
-			failed: 1,
-			failureRate: 0.5,
-			averageRunTime: 0,
-			timeSaved: 0,
-		});
-
-		expect(byTime[1].values).toEqual({
-			total: 2,
-			succeeded: 2,
-			failed: 0,
-			failureRate: 0,
-			averageRunTime: 15,
-			timeSaved: 0,
-		});
-
-		expect(byTime[2].values).toEqual({
-			total: 2,
-			succeeded: 2,
-			failed: 0,
-			failureRate: 0,
-			averageRunTime: 0,
-			timeSaved: 0,
-		});
-
-		expect(byTime[3].values).toEqual({
-			total: 7,
-			succeeded: 3,
-			failed: 4,
-			failureRate: 4 / 7,
-			averageRunTime: 0,
-			timeSaved: 0,
-		});
-	});
-
-	test('compacted data with limited insight types are grouped by time correctly', async () => {
-		// ARRANGE
-		for (const workflow of [workflow1, workflow2]) {
-			await createCompactedInsightsEvent(workflow, {
-				type: 'success',
-				value: workflow === workflow1 ? 1 : 2,
-				periodUnit: 'day',
-				periodStart: DateTime.utc(),
+				expect(mockInsightsByPeriodRepository.getInsightsByWorkflow).not.toHaveBeenCalled();
 			});
-			await createCompactedInsightsEvent(workflow, {
-				type: 'failure',
-				value: 2,
-				periodUnit: 'day',
-				periodStart: DateTime.utc(),
+
+			it('should query without an access filter for users with the global workflow read scope', async () => {
+				mockWorkflowSharingService.rolesGrantingScope.mockResolvedValue(undefined);
+
+				await insightsService.getInsightsByWorkflow({ user, startDate, endDate });
+
+				expect(mockInsightsByPeriodRepository.getInsightsByWorkflow).toHaveBeenCalledWith(
+					expect.objectContaining({ accessFilter: undefined }),
+				);
 			});
-			await createCompactedInsightsEvent(workflow, {
-				type: 'time_saved_min',
-				value: workflow === workflow1 ? 10 : 20,
-				periodUnit: 'day',
-				periodStart: DateTime.utc().minus({ days: 10 }),
+
+			it('should query with an access filter for users without the global workflow read scope', async () => {
+				mockWorkflowSharingService.rolesGrantingScope.mockResolvedValue({
+					projectRoles: ['project:viewer'],
+					workflowRoles: ['workflow:owner'],
+				});
+
+				await insightsService.getInsightsByWorkflow({ user, startDate, endDate });
+
+				expect(mockInsightsByPeriodRepository.getInsightsByWorkflow).toHaveBeenCalledWith(
+					expect.objectContaining({
+						accessFilter: {
+							user,
+							projectRoles: ['project:viewer'],
+							workflowRoles: ['workflow:owner'],
+						},
+					}),
+				);
 			});
-		}
-
-		// ACT
-		const byTime = await insightsService.getInsightsByTime({
-			maxAgeInDays: 14,
-			periodUnit: 'day',
-			insightTypes: ['time_saved_min', 'failure'],
-		});
-
-		// ASSERT
-		expect(byTime).toHaveLength(2);
-
-		// expect results to contain only failure and time saved insights
-		expect(byTime[0].date).toEqual(DateTime.utc().minus({ days: 10 }).startOf('day').toISO());
-		expect(byTime[0].values).toEqual({
-			timeSaved: 30,
-			failed: 0,
-		});
-
-		expect(byTime[1].date).toEqual(DateTime.utc().startOf('day').toISO());
-		expect(byTime[1].values).toEqual({
-			timeSaved: 0,
-			failed: 4,
-		});
-	});
-});
-
-describe('getAvailableDateRanges', () => {
-	let licenseMock: jest.Mocked<LicenseState>;
-	let insightsService: InsightsService;
-
-	beforeAll(() => {
-		licenseMock = mock<LicenseState>();
-		insightsService = new InsightsService(
-			mock(),
-			mock(),
-			mock(),
-			mock(),
-			licenseMock,
-			mock(),
-			mockLogger(),
-		);
-	});
-
-	test('returns correct ranges when hourly data is enabled and max history is unlimited', () => {
-		licenseMock.getInsightsMaxHistory.mockReturnValue(-1);
-		licenseMock.isInsightsHourlyDataLicensed.mockReturnValue(true);
-
-		const result = insightsService.getAvailableDateRanges();
-
-		expect(result).toEqual([
-			{ key: 'day', licensed: true, granularity: 'hour' },
-			{ key: 'week', licensed: true, granularity: 'day' },
-			{ key: '2weeks', licensed: true, granularity: 'day' },
-			{ key: 'month', licensed: true, granularity: 'day' },
-			{ key: 'quarter', licensed: true, granularity: 'week' },
-			{ key: '6months', licensed: true, granularity: 'week' },
-			{ key: 'year', licensed: true, granularity: 'week' },
-		]);
-	});
-
-	test('returns correct ranges when hourly data is enabled and max history is 365 days', () => {
-		licenseMock.getInsightsMaxHistory.mockReturnValue(365);
-		licenseMock.isInsightsHourlyDataLicensed.mockReturnValue(true);
-
-		const result = insightsService.getAvailableDateRanges();
-
-		expect(result).toEqual([
-			{ key: 'day', licensed: true, granularity: 'hour' },
-			{ key: 'week', licensed: true, granularity: 'day' },
-			{ key: '2weeks', licensed: true, granularity: 'day' },
-			{ key: 'month', licensed: true, granularity: 'day' },
-			{ key: 'quarter', licensed: true, granularity: 'week' },
-			{ key: '6months', licensed: true, granularity: 'week' },
-			{ key: 'year', licensed: true, granularity: 'week' },
-		]);
-	});
-
-	test('returns correct ranges when hourly data is disabled and max history is 30 days', () => {
-		licenseMock.getInsightsMaxHistory.mockReturnValue(30);
-		licenseMock.isInsightsHourlyDataLicensed.mockReturnValue(false);
-
-		const result = insightsService.getAvailableDateRanges();
-
-		expect(result).toEqual([
-			{ key: 'day', licensed: false, granularity: 'hour' },
-			{ key: 'week', licensed: true, granularity: 'day' },
-			{ key: '2weeks', licensed: true, granularity: 'day' },
-			{ key: 'month', licensed: true, granularity: 'day' },
-			{ key: 'quarter', licensed: false, granularity: 'week' },
-			{ key: '6months', licensed: false, granularity: 'week' },
-			{ key: 'year', licensed: false, granularity: 'week' },
-		]);
-	});
-
-	test('returns correct ranges when max history is less than 7 days', () => {
-		licenseMock.getInsightsMaxHistory.mockReturnValue(5);
-		licenseMock.isInsightsHourlyDataLicensed.mockReturnValue(false);
-
-		const result = insightsService.getAvailableDateRanges();
-
-		expect(result).toEqual([
-			{ key: 'day', licensed: false, granularity: 'hour' },
-			{ key: 'week', licensed: false, granularity: 'day' },
-			{ key: '2weeks', licensed: false, granularity: 'day' },
-			{ key: 'month', licensed: false, granularity: 'day' },
-			{ key: 'quarter', licensed: false, granularity: 'week' },
-			{ key: '6months', licensed: false, granularity: 'week' },
-			{ key: 'year', licensed: false, granularity: 'week' },
-		]);
-	});
-
-	test('returns correct ranges when max history is 90 days and hourly data is enabled', () => {
-		licenseMock.getInsightsMaxHistory.mockReturnValue(90);
-		licenseMock.isInsightsHourlyDataLicensed.mockReturnValue(true);
-
-		const result = insightsService.getAvailableDateRanges();
-
-		expect(result).toEqual([
-			{ key: 'day', licensed: true, granularity: 'hour' },
-			{ key: 'week', licensed: true, granularity: 'day' },
-			{ key: '2weeks', licensed: true, granularity: 'day' },
-			{ key: 'month', licensed: true, granularity: 'day' },
-			{ key: 'quarter', licensed: true, granularity: 'week' },
-			{ key: '6months', licensed: false, granularity: 'week' },
-			{ key: 'year', licensed: false, granularity: 'week' },
-		]);
-	});
-});
-
-describe('getMaxAgeInDaysAndGranularity', () => {
-	let insightsService: InsightsService;
-	let licenseMock: jest.Mocked<LicenseState>;
-
-	beforeAll(() => {
-		licenseMock = mock<LicenseState>();
-		insightsService = new InsightsService(
-			mock<InsightsByPeriodRepository>(),
-			mock<InsightsCompactionService>(),
-			mock<InsightsCollectionService>(),
-			mock<InsightsPruningService>(),
-			licenseMock,
-			mock<InstanceSettings>(),
-			mockLogger(),
-		);
-	});
-
-	test('returns correct maxAgeInDays and granularity for a valid licensed date range', () => {
-		licenseMock.getInsightsMaxHistory.mockReturnValue(365);
-		licenseMock.isInsightsHourlyDataLicensed.mockReturnValue(true);
-
-		const result = insightsService.getMaxAgeInDaysAndGranularity('month');
-
-		expect(result).toEqual({
-			key: 'month',
-			licensed: true,
-			granularity: 'day',
-			maxAgeInDays: 30,
 		});
 	});
 
-	test('throws an error if the date range is not available', () => {
-		licenseMock.getInsightsMaxHistory.mockReturnValue(365);
-		licenseMock.isInsightsHourlyDataLicensed.mockReturnValue(true);
+	describe('getInsightsByTime', () => {
+		const startDate = new Date('2024-01-01');
+		const endDate = new Date('2024-01-07');
 
-		expect(() => {
-			insightsService.getMaxAgeInDaysAndGranularity('invalidKey' as InsightsDateRange['key']);
-		}).toThrowError('The selected date range is not available');
-	});
-
-	test('throws an error if the date range is not licensed', () => {
-		licenseMock.getInsightsMaxHistory.mockReturnValue(30);
-		licenseMock.isInsightsHourlyDataLicensed.mockReturnValue(false);
-
-		expect(() => {
-			insightsService.getMaxAgeInDaysAndGranularity('year');
-		}).toThrowError('The selected date range exceeds the maximum history allowed by your license.');
-	});
-
-	test('returns correct maxAgeInDays and granularity for a valid date range with hourly data disabled', () => {
-		licenseMock.getInsightsMaxHistory.mockReturnValue(90);
-		licenseMock.isInsightsHourlyDataLicensed.mockReturnValue(false);
-
-		const result = insightsService.getMaxAgeInDaysAndGranularity('quarter');
-
-		expect(result).toEqual({
-			key: 'quarter',
-			licensed: true,
-			granularity: 'week',
-			maxAgeInDays: 90,
-		});
-	});
-
-	test('returns correct maxAgeInDays and granularity for a valid date range with unlimited history', () => {
-		licenseMock.getInsightsMaxHistory.mockReturnValue(-1);
-		licenseMock.isInsightsHourlyDataLicensed.mockReturnValue(true);
-
-		const result = insightsService.getMaxAgeInDaysAndGranularity('day');
-
-		expect(result).toEqual({
-			key: 'day',
-			licensed: true,
-			granularity: 'hour',
-			maxAgeInDays: 1,
-		});
-	});
-});
-
-describe('shutdown', () => {
-	let insightsService: InsightsService;
-
-	const mockCollectionService = mock<InsightsCollectionService>({
-		shutdown: jest.fn().mockResolvedValue(undefined),
-		stopFlushingTimer: jest.fn(),
-	});
-
-	const mockCompactionService = mock<InsightsCompactionService>({
-		stopCompactionTimer: jest.fn(),
-	});
-
-	const mockPruningService = mock<InsightsPruningService>({
-		stopPruningTimer: jest.fn(),
-	});
-
-	beforeAll(() => {
-		insightsService = new InsightsService(
-			mock<InsightsByPeriodRepository>(),
-			mockCompactionService,
-			mockCollectionService,
-			mockPruningService,
-			mock<LicenseState>(),
-			mock<InstanceSettings>(),
-			mockLogger(),
-		);
-	});
-
-	test('shutdown stops timers and shuts down services', async () => {
-		// ACT
-		await insightsService.shutdown();
-
-		// ASSERT
-		expect(mockCollectionService.shutdown).toHaveBeenCalled();
-		expect(mockCompactionService.stopCompactionTimer).toHaveBeenCalled();
-		expect(mockPruningService.stopPruningTimer).toHaveBeenCalled();
-	});
-});
-
-describe('legacy sqlite (without pooling) handles concurrent insights db process without throwing', () => {
-	let initialFlushBatchSize: number;
-	let insightsConfig: InsightsConfig;
-	beforeAll(() => {
-		insightsConfig = Container.get(InsightsConfig);
-		initialFlushBatchSize = insightsConfig.flushBatchSize;
-
-		insightsConfig.flushBatchSize = 50;
-	});
-
-	afterAll(() => {
-		insightsConfig.flushBatchSize = initialFlushBatchSize;
-	});
-
-	test('should handle concurrent flush and compaction without error', async () => {
-		const insightsCollectionService = Container.get(InsightsCollectionService);
-		const insightsCompactionService = Container.get(InsightsCompactionService);
-
-		const project = await createTeamProject();
-		const workflow = await createWorkflow({}, project);
-		await createMetadata(workflow);
-
-		const ctx = mock<WorkflowExecuteAfterContext>({ workflow });
-		const startedAt = DateTime.utc();
-		const stoppedAt = startedAt.plus({ seconds: 5 });
-		ctx.runData = mock<IRun>({
-			mode: 'webhook',
-			status: 'success',
-			startedAt: startedAt.toJSDate(),
-			stoppedAt: stoppedAt.toJSDate(),
+		beforeEach(() => {
+			mockInsightsByPeriodRepository.getInsightsByTime.mockResolvedValue([]);
 		});
 
-		// Create test data
-		const rawInsights = [];
-		for (let i = 0; i < 100; i++) {
-			rawInsights.push({
-				type: 'success' as InsightsRaw['type'],
-				value: 1,
-				periodUnit: 'hour',
-				periodStart: DateTime.now().minus({ day: 91, hour: i + 1 }),
+		describe('project access', () => {
+			it('should not check project access when no project is requested', async () => {
+				await insightsService.getInsightsByTime({ user, startDate, endDate });
+
+				expect(userHasScopes).not.toHaveBeenCalled();
 			});
-		}
-		// Create raw insights events to be compacted
-		await createRawInsightsEvents(workflow, rawInsights);
 
-		//
-		for (let i = 0; i < 100; i++) {
-			await createCompactedInsightsEvent(workflow, {
-				type: 'success',
-				value: 1,
-				periodUnit: 'hour',
-				periodStart: DateTime.now().minus({ day: 91, hour: i + 1 }),
+			it('should throw a forbidden error when the requested project is not accessible', async () => {
+				vi.mocked(userHasScopes).mockResolvedValue(false);
+
+				await expect(
+					insightsService.getInsightsByTime({
+						user,
+						startDate,
+						endDate,
+						projectId: 'project-1',
+					}),
+				).rejects.toThrow('You do not have access to insights for this project.');
+
+				expect(mockInsightsByPeriodRepository.getInsightsByTime).not.toHaveBeenCalled();
 			});
-		}
 
-		for (let i = 0; i < 100; i++) {
-			await insightsCollectionService.handleWorkflowExecuteAfter(ctx);
-		}
+			it('should query without an access filter for users with the global workflow read scope', async () => {
+				mockWorkflowSharingService.rolesGrantingScope.mockResolvedValue(undefined);
 
-		// ACT
-		const promises = [
-			insightsCollectionService.flushEvents(),
-			insightsCollectionService.flushEvents(),
-			insightsCompactionService.compactRawToHour(),
-			insightsCompactionService.compactHourToDay(),
-		];
-		await expect(Promise.all(promises)).resolves.toBeDefined();
+				await insightsService.getInsightsByTime({ user, startDate, endDate });
+
+				expect(mockInsightsByPeriodRepository.getInsightsByTime).toHaveBeenCalledWith(
+					expect.objectContaining({ accessFilter: undefined }),
+				);
+			});
+
+			it('should query with an access filter for users without the global workflow read scope', async () => {
+				mockWorkflowSharingService.rolesGrantingScope.mockResolvedValue({
+					projectRoles: ['project:viewer'],
+					workflowRoles: ['workflow:owner'],
+				});
+
+				await insightsService.getInsightsByTime({ user, startDate, endDate });
+
+				expect(mockInsightsByPeriodRepository.getInsightsByTime).toHaveBeenCalledWith(
+					expect.objectContaining({
+						accessFilter: {
+							user,
+							projectRoles: ['project:viewer'],
+							workflowRoles: ['workflow:owner'],
+						},
+					}),
+				);
+			});
+		});
+	});
+
+	describe('getTimeSavedInsightsByTime', () => {
+		const startDate = new Date('2024-01-01');
+		const endDate = new Date('2024-01-07');
+
+		beforeEach(() => {
+			mockInsightsByPeriodRepository.getInsightsByTime.mockResolvedValue([]);
+		});
+
+		it('requests only time saved', async () => {
+			await insightsService.getTimeSavedInsightsByTime({
+				user,
+				startDate,
+				endDate,
+			});
+
+			expect(mockInsightsByPeriodRepository.getInsightsByTime).toHaveBeenCalledWith(
+				expect.objectContaining({
+					insightTypes: ['time_saved_min'],
+				}),
+			);
+		});
 	});
 });

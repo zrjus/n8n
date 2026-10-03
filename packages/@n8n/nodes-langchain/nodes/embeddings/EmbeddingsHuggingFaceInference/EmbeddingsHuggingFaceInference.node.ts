@@ -1,14 +1,17 @@
+import type { InferenceProviderOrPolicy } from '@huggingface/inference';
+import { InferenceClient, PROVIDERS_OR_POLICIES } from '@huggingface/inference';
 import { HuggingFaceInferenceEmbeddings } from '@langchain/community/embeddings/hf';
 import {
+	assertCredentialAllowsUrl,
 	NodeConnectionTypes,
+	NodeOperationError,
 	type INodeType,
 	type INodeTypeDescription,
 	type ISupplyDataFunctions,
 	type SupplyData,
 } from 'n8n-workflow';
 
-import { logWrapper } from '@utils/logWrapper';
-import { getConnectionHintNoticeField } from '@utils/sharedFields';
+import { logWrapper, getConnectionHintNoticeField, proxyFetch } from '@n8n/ai-utilities';
 
 export class EmbeddingsHuggingFaceInference implements INodeType {
 	description: INodeTypeDescription = {
@@ -76,6 +79,13 @@ export class EmbeddingsHuggingFaceInference implements INodeType {
 						description: 'Custom endpoint URL',
 						type: 'string',
 					},
+					{
+						displayName: 'Provider',
+						name: 'provider',
+						type: 'options',
+						options: PROVIDERS_OR_POLICIES.map((value) => ({ value, name: value })),
+						default: 'auto',
+					},
 				],
 			},
 		],
@@ -91,14 +101,46 @@ export class EmbeddingsHuggingFaceInference implements INodeType {
 		const credentials = await this.getCredentials('huggingFaceApi');
 		const options = this.getNodeParameter('options', itemIndex, {}) as object;
 
+		if ('provider' in options && !isValidHFProviderOrPolicy(options.provider)) {
+			throw new NodeOperationError(this.getNode(), 'Unsupported provider');
+		}
+
+		const endpointUrl =
+			'endpointUrl' in options && typeof options.endpointUrl === 'string' && options.endpointUrl
+				? options.endpointUrl
+				: undefined;
+
+		if (endpointUrl) {
+			assertCredentialAllowsUrl({
+				node: this.getNode(),
+				credentialData: credentials,
+				url: endpointUrl,
+			});
+		}
+
+		const apiKey = credentials.apiKey as string;
 		const embeddings = new HuggingFaceInferenceEmbeddings({
-			apiKey: credentials.apiKey as string,
+			apiKey,
 			model,
 			...options,
 		});
+
+		// The LangChain class builds its client on the global fetch and exposes no
+		// option to change that, so replace it with one on the egress-filtered fetch.
+		const egressFilter = this.helpers.getSecureEgressFilter();
+		const client = new InferenceClient(apiKey, {
+			fetch: async (input, init) => await proxyFetch({ input, init, egressFilter }),
+		});
+		embeddings.client = endpointUrl ? client.endpoint(endpointUrl) : client;
 
 		return {
 			response: logWrapper(embeddings, this),
 		};
 	}
+}
+
+function isValidHFProviderOrPolicy(provider: unknown): provider is InferenceProviderOrPolicy {
+	return (
+		typeof provider === 'string' && (PROVIDERS_OR_POLICIES as readonly string[]).includes(provider)
+	);
 }

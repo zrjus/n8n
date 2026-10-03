@@ -3,7 +3,9 @@ import { ElTag } from 'element-plus';
 
 import { useI18n } from '../../composables/useI18n';
 import type { NodeCreatorTag } from '../../types/node-creator-node';
+import N8nBadge from '../N8nBadge';
 import N8nIcon from '../N8nIcon';
+import PreviewBadge from '../PreviewBadge/PreviewBadge.vue';
 
 export interface Props {
 	active?: boolean;
@@ -14,6 +16,9 @@ export interface Props {
 	title: string;
 	showActionArrow?: boolean;
 	isOfficial?: boolean;
+	hideNodeIcon?: boolean;
+	isNew?: boolean;
+	disabled?: boolean;
 }
 
 defineProps<Props>();
@@ -22,7 +27,7 @@ defineEmits<{
 	tooltipClick: [e: MouseEvent];
 }>();
 
-defineSlots<{ icon: {}; extraDetails: {}; dragContent: {} }>();
+defineSlots<{ icon: {}; extraDetails: {}; dragContent: {}; trailing: {} }>();
 
 const { t } = useI18n();
 </script>
@@ -32,18 +37,40 @@ const { t } = useI18n();
 		:class="{
 			[$style.creatorNode]: true,
 			[$style.hasAction]: !showActionArrow,
+			[$style.disabled]: disabled,
 		}"
 		v-bind="$attrs"
 	>
-		<div :class="$style.nodeIcon">
+		<div v-if="!hideNodeIcon" :class="$style.nodeIcon">
 			<slot name="icon" />
 		</div>
-		<div>
+		<div :class="$style.body">
 			<div :class="$style.details">
 				<span :class="$style.name" data-test-id="node-creator-item-name" v-text="title" />
-				<ElTag v-if="tag" :class="$style.tag" size="small" round :type="tag.type ?? 'success'">
+				<PreviewBadge
+					v-if="tag?.preview"
+					size="small"
+					:class="$style.previewBadge"
+					:text="tag.text"
+				/>
+				<N8nBadge
+					v-else-if="tag?.pill"
+					size="xxsmall"
+					:variant="tag.type === 'info' || tag.type === 'danger' ? tag.type : 'success'"
+				>
+					{{ tag.text }}
+				</N8nBadge>
+				<ElTag
+					v-else-if="tag"
+					:class="$style.tag"
+					disable-transitions
+					size="small"
+					round
+					:type="tag.type ?? 'success'"
+				>
 					{{ tag.text }}
 				</ElTag>
+				<N8nBadge v-if="isNew" variant="success">{{ t('nodeCreatorNode.new') }}</N8nBadge>
 				<N8nIcon
 					v-if="isTrigger"
 					icon="bolt-filled"
@@ -65,6 +92,9 @@ const { t } = useI18n();
 		<button v-if="showActionArrow" :class="$style.panelIcon">
 			<N8nIcon icon="arrow-right" size="large" />
 		</button>
+		<div v-else-if="$slots.trailing" :class="$style.trailing">
+			<slot name="trailing" />
+		</div>
 	</div>
 </template>
 
@@ -74,24 +104,45 @@ const { t } = useI18n();
 	align-items: center;
 	cursor: pointer;
 	z-index: 1;
-	padding: var(--spacing-xs) var(--spacing-2xs) var(--spacing-xs) 0;
+	padding: var(--spacing--xs) var(--spacing--2xs) var(--spacing--xs) 0;
 
 	&.hasAction {
 		user-select: none;
 	}
 }
 .creatorNode:hover .panelIcon {
-	color: var(--action-arrow-color-hover, var(--color-text-light));
+	color: var(--action--arrow--color--hover, var(--color--text--tint-1));
+}
+.disabled {
+	cursor: not-allowed;
+
+	// Fade the node, not the trailing slot, so a status icon there keeps full strength.
+	.nodeIcon,
+	.body {
+		opacity: 0.45;
+	}
+}
+.trailing {
+	flex-grow: 1;
+	display: flex;
+	justify-content: flex-end;
+	align-items: center;
+	margin-left: var(--spacing--2xs);
+	padding-right: var(--spacing--2xs);
+	color: var(--color--text--tint-1);
+}
+.previewBadge {
+	margin-left: var(--spacing--2xs);
 }
 :root .tag {
-	margin-left: var(--spacing-2xs);
-	line-height: var(--font-size-3xs);
-	font-size: var(--font-size-3xs);
-	padding: 0.1875rem var(--spacing-3xs) var(--spacing-4xs) var(--spacing-3xs);
+	margin-left: var(--spacing--2xs);
+	line-height: var(--font-size--3xs);
+	font-size: var(--font-size--3xs);
+	padding: 0.1875rem var(--spacing--3xs) var(--spacing--4xs) var(--spacing--3xs);
 	height: auto;
 
 	span {
-		font-size: var(--font-size-2xs) !important;
+		font-size: var(--font-size--2xs) !important;
 	}
 }
 .panelIcon {
@@ -99,50 +150,50 @@ const { t } = useI18n();
 	display: flex;
 	justify-content: flex-end;
 	align-items: center;
-	margin-left: var(--spacing-2xs);
-	color: var(--action-arrow-color, var(--color-text-lighter));
+	margin-left: var(--spacing--2xs);
+	color: var(--action--arrow--color, var(--color--text--tint-2));
 	cursor: pointer;
 	background: transparent;
 	border: none;
 }
 .tooltipIcon {
-	margin-left: var(--spacing-3xs);
-	color: var(--color-text-base);
-	font-size: var(--font-size-2xs);
+	margin-left: var(--spacing--3xs);
+	color: var(--color--text);
+	font-size: var(--font-size--2xs);
 }
 .details {
 	display: flex;
 	align-items: center;
-	gap: var(--spacing-3xs);
+	gap: var(--spacing--3xs);
 }
 .nodeIcon {
 	display: flex;
-	margin-right: var(--node-icon-margin-right, var(--spacing-s));
+	margin-right: var(--node--icon--margin-right, var(--spacing--sm));
 }
 .name {
-	font-weight: var(--node-creator-name-weight, var(--font-weight-medium));
-	font-size: var(--node-creator-name-size, var(--font-size-s));
+	font-weight: var(--node-creator--name--font-weight, var(--font-weight--medium));
+	font-size: var(--node-creator--name--font-size, var(--font-size--sm));
 	line-height: 1.115rem;
 }
 .description {
-	margin-top: var(--spacing-5xs);
-	font-size: var(--font-size-2xs);
+	margin-top: var(--spacing--5xs);
+	font-size: var(--font-size--2xs);
 	line-height: 1rem;
-	font-weight: var(--font-weight-regular);
-	color: var(--node-creator-description-colos, var(--color-text-base));
+	font-weight: var(--font-weight--regular);
+	color: var(--node-creator--description--color, var(--color--text));
 }
 
 .aiIcon {
-	color: var(--color-secondary);
+	color: var(--color--secondary);
 }
 
 .triggerIcon {
-	color: var(--color-primary);
+	color: var(--color--primary);
 }
 </style>
 
 <style lang="scss" scoped>
 .el-tooltip svg {
-	color: var(--color-foreground-xdark);
+	color: var(--color--foreground--shade-2);
 }
 </style>

@@ -6,6 +6,10 @@ const path = require('path');
 // did get started from another folder that the root one.
 process.env.NODE_CONFIG_DIR = process.env.NODE_CONFIG_DIR || path.join(__dirname, 'config');
 
+// Must stay shorter than the original command line.
+// See https://nodejs.org/api/process.html#processtitle
+process.title = process.argv[2] ? `n8n ${process.argv[2]}` : 'n8n';
+
 // Check if version should be displayed
 const versionFlags = ['-v', '-V', '--version'];
 if (versionFlags.includes(process.argv.slice(-1)[0])) {
@@ -37,7 +41,7 @@ require('reflect-metadata');
 // Also, do not use `inE2ETests` from constants here, because that'd end up code that might read from `process.env` before the values are loaded from an `.env` file.
 if (process.env.E2E_TESTS !== 'true') {
 	// Loading dotenv early ensures that `process.env` is up-to-date everywhere in code
-	require('dotenv').config();
+	require('dotenv').config({ quiet: true });
 }
 
 // Load config early to ensure `N8N_CONFIG_FILES` values are populated into `GlobalConfig`

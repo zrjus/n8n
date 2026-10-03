@@ -1,31 +1,94 @@
-import { ModuleMetadata } from '@n8n/decorators';
-import type { EntityClass, ModuleSettings } from '@n8n/decorators';
+import type { InstanceType } from '@n8n/constants';
+import { ModuleMetadata, SystemTaskMetadata } from '@n8n/decorators';
+import type { EntityClass, ModuleContext, ModuleSettings } from '@n8n/decorators';
 import { Container, Service } from '@n8n/di';
+import { existsSync } from 'fs';
+import type { NodeLoader } from 'n8n-workflow';
 import path from 'path';
+import { pathToFileURL } from 'url';
 
-import { MissingModuleError } from './errors/missing-module.error';
-import { ModuleConfusionError } from './errors/module-confusion.error';
-import { ModulesConfig } from './modules.config';
-import type { ModuleName } from './modules.config';
 import { LicenseState } from '../license-state';
 import { Logger } from '../logging/logger';
+import { MissingModuleError } from './errors/missing-module.error';
+import { ModuleConfusionError } from './errors/module-confusion.error';
+import { ModuleLoadError } from './errors/module-load.error';
+import { ModulesConfig } from './modules.config';
+import type { ModuleName } from './modules.config';
+
+/** Modules that load from workspace packages instead of the n8n modules directory. */
+export type PackagedModules = Partial<Record<ModuleName, () => Promise<unknown>>>;
+
+const getModuleEntryPath = (modulesDir: string, moduleName: string, isEnterprise = false) =>
+	path.join(modulesDir, isEnterprise ? `${moduleName}.ee` : moduleName, `${moduleName}.module.js`);
+
+export const getModuleEntryUrl = (modulesDir: string, moduleName: string, isEnterprise = false) =>
+	pathToFileURL(getModuleEntryPath(modulesDir, moduleName, isEnterprise)).href;
 
 @Service()
 export class ModuleRegistry {
 	readonly entities: EntityClass[] = [];
 
+	readonly nodeLoaders: NodeLoader[] = [];
+
 	readonly settings: Map<string, ModuleSettings> = new Map();
+
+	readonly context: Map<string, ModuleContext> = new Map();
 
 	constructor(
 		private readonly moduleMetadata: ModuleMetadata,
 		private readonly licenseState: LicenseState,
 		private readonly logger: Logger,
 		private readonly modulesConfig: ModulesConfig,
+		private readonly systemTaskMetadata: SystemTaskMetadata,
 	) {}
 
-	private readonly defaultModules: ModuleName[] = ['insights', 'external-secrets'];
+	private readonly defaultModules: ModuleName[] = [
+		// policy-infrastructure leads: it registers the enforcement implementation
+		// that every policy feature's checks are run by.
+		'policy-infrastructure',
+		'insights',
+		'external-secrets',
+		'community-packages',
+		'data-table',
+		// oauth-server precedes mcp: the mcp module registers its protected
+		// resource with the oauth-server module's registry on init.
+		'oauth-server',
+		'mcp',
+		'provisioning',
+		'breaking-changes',
+		'source-control',
+		'dynamic-credentials',
+		'chat-hub',
+		'sso-oidc',
+		'sso-saml',
+		'log-streaming',
+		'ldap',
+		'quick-connect',
+		'workflow-builder',
+		'favorites',
+		'redaction',
+		'instance-registry',
+		'otel',
+		'token-exchange',
+		'instance-version-history',
+		'encryption-key-manager',
+		'oauth-jwe',
+		'n8n-packages',
+		'runtime-credentials',
+		'mcp-registry',
+		'workflow-reviews',
+		'instance-ai',
+		'agents',
+		'inbound-auth-core',
+	];
 
 	private readonly activeModules: string[] = [];
+
+	private readonly packagedModules: PackagedModules = {};
+
+	registerPackagedModules(packagedModules: PackagedModules) {
+		Object.assign(this.packagedModules, packagedModules);
+	}
 
 	get eligibleModules(): ModuleName[] {
 		const { enabledModules, disabledModules } = this.modulesConfig;
@@ -54,7 +117,8 @@ export class ModuleRegistry {
 			// docker + tests
 			const n8nPackagePath = require.resolve('n8n/package.json');
 			const n8nRoot = path.dirname(n8nPackagePath);
-			const dir = process.env.NODE_ENV === 'test' ? 'src' : 'dist';
+			const srcDirExists = existsSync(path.join(n8nRoot, 'src'));
+			const dir = process.env.NODE_ENV === 'test' && srcDirExists ? 'src' : 'dist';
 			modulesDir = path.join(n8nRoot, dir, 'modules');
 		} catch {
 			// local dev
@@ -63,13 +127,47 @@ export class ModuleRegistry {
 		}
 
 		for (const moduleName of modules ?? this.eligibleModules) {
-			try {
-				await import(`${modulesDir}/${moduleName}/${moduleName}.module`);
-			} catch {
+			const importPackagedModule = this.packagedModules[moduleName];
+
+			if (importPackagedModule) {
 				try {
-					await import(`${modulesDir}/${moduleName}.ee/${moduleName}.module`);
+					await importPackagedModule();
 				} catch (error) {
-					throw new MissingModuleError(moduleName, error instanceof Error ? error.message : '');
+					throw new ModuleLoadError(moduleName, error);
+				}
+
+				continue;
+			}
+
+			const entryPath = getModuleEntryPath(modulesDir, moduleName);
+
+			try {
+				await import(pathToFileURL(entryPath).href);
+			} catch (primaryError) {
+				// Only an absent entrypoint means the module may live in the enterprise
+				// directory instead. If the entrypoint is on disk, the failure comes from
+				// its own code - e.g. a dependency it cannot resolve - so surface it.
+				// Retrying with the enterprise path would replace it with a "cannot find
+				// module" error for a directory that never existed, and send the reader
+				// looking for a naming mistake. The filesystem is the reliable test here:
+				// a missing dependency and a missing entrypoint can both surface as
+				// `ERR_MODULE_NOT_FOUND`.
+				if (existsSync(entryPath)) throw new ModuleLoadError(moduleName, primaryError);
+
+				const enterpriseEntryPath = getModuleEntryPath(modulesDir, moduleName, true);
+
+				try {
+					await import(pathToFileURL(enterpriseEntryPath).href);
+				} catch (enterpriseError) {
+					if (existsSync(enterpriseEntryPath)) {
+						throw new ModuleLoadError(moduleName, enterpriseError);
+					}
+
+					// Neither entrypoint is on disk.
+					throw new MissingModuleError(
+						moduleName,
+						primaryError instanceof Error ? primaryError.message : '',
+					);
 				}
 			}
 		}
@@ -77,9 +175,13 @@ export class ModuleRegistry {
 		for (const ModuleClass of this.moduleMetadata.getClasses()) {
 			const entities = await Container.get(ModuleClass).entities?.();
 
-			if (!entities || entities.length === 0) continue;
+			if (entities?.length) this.entities.push(...entities);
 
-			this.entities.push(...entities);
+			const loaders = await Container.get(ModuleClass).nodeLoaders?.();
+
+			if (loaders?.length) this.nodeLoaders.push(...loaders);
+
+			await Container.get(ModuleClass).commands?.();
 		}
 	}
 
@@ -90,28 +192,74 @@ export class ModuleRegistry {
 	 * specific setup.
 	 *
 	 * `ModuleRegistry.loadModules` must have been called before.
+	 *
+	 * @param only Init only these modules, for a one-off command that needs a few of them.
 	 */
-	async initModules() {
-		for (const [moduleName, moduleEntry] of this.moduleMetadata.getEntries()) {
-			const { licenseFlag, class: ModuleClass } = moduleEntry;
+	async initModules(instanceType: InstanceType, only?: ModuleName[]) {
+		const selected = only ? new Set<string>(only) : undefined;
 
-			if (licenseFlag && !this.licenseState.isLicensed(licenseFlag)) {
+		for (const [moduleName, moduleEntry] of this.moduleMetadata.getEntries()) {
+			if (selected && !selected.has(moduleName)) continue;
+
+			const { licenseFlag, instanceTypes, class: ModuleClass } = moduleEntry;
+
+			if (licenseFlag !== undefined && !this.licenseState.isLicensed(licenseFlag)) {
 				this.logger.debug(`Skipped init for unlicensed module "${moduleName}"`);
+				continue;
+			}
+
+			if (instanceTypes !== undefined && !instanceTypes.includes(instanceType)) {
+				this.logger.debug(
+					`Skipped init for module "${moduleName}" (instance type "${instanceType}" not in: ${instanceTypes.join(', ')})`,
+				);
 				continue;
 			}
 
 			await Container.get(ModuleClass).init?.();
 
+			const systemTasks = await Container.get(ModuleClass).systemTasks?.();
+
+			for (const taskClass of systemTasks ?? []) {
+				this.systemTaskMetadata.register(taskClass);
+			}
+
 			const moduleSettings = await Container.get(ModuleClass).settings?.();
 
-			if (!moduleSettings) continue;
+			if (moduleSettings) this.settings.set(moduleName, moduleSettings);
 
-			this.settings.set(moduleName, moduleSettings);
+			const moduleContext = await Container.get(ModuleClass).context?.();
+
+			if (moduleContext) this.context.set(moduleName, moduleContext);
 
 			this.logger.debug(`Initialized module "${moduleName}"`);
 
 			this.activeModules.push(moduleName);
 		}
+	}
+
+	/**
+	 * Refreshes the settings for a specific module by calling its `settings` method.
+	 * This will make sure that any changes to the module's settings are reflected in the registry
+	 * and in turn available to other parts of the application (like front-end settings service).
+	 * If the module does not provide settings, it removes any existing settings for that module.
+	 */
+	async refreshModuleSettings(moduleName: ModuleName) {
+		const moduleEntry = this.moduleMetadata.get(moduleName);
+
+		if (!moduleEntry) {
+			this.logger.debug('Skipping settings refresh for unregistered module', { moduleName });
+			return null;
+		}
+
+		const moduleSettings = await Container.get(moduleEntry.class).settings?.();
+
+		if (moduleSettings) {
+			this.settings.set(moduleName, moduleSettings);
+		} else {
+			this.settings.delete(moduleName);
+		}
+
+		return moduleSettings ?? null;
 	}
 
 	async shutdownModule(moduleName: ModuleName) {

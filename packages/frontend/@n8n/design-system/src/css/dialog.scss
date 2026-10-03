@@ -1,4 +1,5 @@
 @use 'mixins/mixins';
+@use 'mixins/motion';
 @use 'mixins/utils';
 @use './common/var';
 @use 'common/popup';
@@ -34,9 +35,9 @@
 
 @include mixins.b(dialog) {
 	position: relative;
-	margin: 0 auto 50px;
+	margin: 0 auto;
 	background: var.$dialog-background-color;
-	border-radius: var(--border-radius-small);
+	border-radius: var(--radius--sm);
 	box-shadow: var.$dialog-box-shadow;
 	box-sizing: border-box;
 	width: var(#{utils.getCssVarName('dialog-width')}, 50%);
@@ -73,30 +74,31 @@
 		outline: none;
 		cursor: pointer;
 		font-size: var.$message-close-size;
+		z-index: 2;
 
 		.el-dialog__close {
-			color: var(--color-info);
+			color: var(--color--info);
 		}
 
 		&:focus,
 		&:hover {
 			.el-dialog__close {
-				color: var(--color-primary);
+				color: var(--color--primary);
 			}
 		}
 	}
 
 	@include mixins.e(title) {
-		line-height: var(--font-line-height-compact);
-		font-size: var(--font-size-xl);
-		color: var(--color-text-dark);
-		font-weight: var(--font-weight-regular);
+		line-height: var(--line-height--sm);
+		font-size: var(--font-size--xl);
+		color: var(--color--text--shade-1);
+		font-weight: var(--font-weight--regular);
 	}
 
 	@include mixins.e(body) {
 		padding: var.$dialog-padding-primary;
 		padding-top: 0;
-		color: var(--color-text-base);
+		color: var(--color--text);
 	}
 
 	@include mixins.e(footer) {
@@ -106,37 +108,21 @@
 		box-sizing: border-box;
 
 		.button + .button {
-			margin-left: var(--spacing-2xs);
+			margin-left: var(--spacing--2xs);
 		}
 	}
 }
 
 .dialog-fade-enter-active {
-	animation: dialog-fade-in 0.3s;
+	--animation--fade-in-down--duration: 0.3s;
+	--animation--fade-in-down--translate: 20px;
+
+	@include motion.fade-in-down;
 }
 
 .dialog-fade-leave-active {
-	animation: dialog-fade-out 0.3s;
-}
+	--animation--fade-out-up--duration: 0.3s;
+	--animation--fade-out-up--translate: 20px;
 
-@keyframes dialog-fade-in {
-	0% {
-		transform: translate3d(0, -20px, 0);
-		opacity: 0;
-	}
-	100% {
-		transform: translate3d(0, 0, 0);
-		opacity: 1;
-	}
-}
-
-@keyframes dialog-fade-out {
-	0% {
-		transform: translate3d(0, 0, 0);
-		opacity: 1;
-	}
-	100% {
-		transform: translate3d(0, -20px, 0);
-		opacity: 0;
-	}
+	@include motion.fade-out-up;
 }

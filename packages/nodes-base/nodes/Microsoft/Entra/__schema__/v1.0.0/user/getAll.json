@@ -1,8 +1,8 @@
 {
     "type": "object",
     "properties": {
-        "accountEnabled": {
-            "type": "boolean"
+        "createdDateTime": {
+            "type": "string"
         },
         "displayName": {
             "type": "string"
@@ -10,9 +10,15 @@
         "id": {
             "type": "string"
         },
+        "mailNickname": {
+            "type": "string"
+        },
+        "securityIdentifier": {
+            "type": "string"
+        },
         "userPrincipalName": {
             "type": "string"
         }
     },
-    "version": 4
+    "version": 8
 }

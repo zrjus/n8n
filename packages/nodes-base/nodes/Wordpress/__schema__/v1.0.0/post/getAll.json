@@ -132,6 +132,20 @@
                         }
                     }
                 },
+                "wp:featuredmedia": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "embeddable": {
+                                "type": "boolean"
+                            },
+                            "href": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                },
                 "wp:term": {
                     "type": "array",
                     "items": {
@@ -158,6 +172,12 @@
             "type": "array",
             "items": {
                 "type": "integer"
+            }
+        },
+        "class_list": {
+            "type": "array",
+            "items": {
+                "type": "string"
             }
         },
         "comment_status": {
@@ -258,5 +278,5 @@
             "type": "string"
         }
     },
-    "version": 3
+    "version": 5
 }

@@ -22,9 +22,9 @@ export const workflowOperations: INodeProperties[] = [
 		},
 		options: [
 			{
-				name: 'Activate',
+				name: 'Publish',
 				value: 'activate',
-				action: 'Activate a workflow',
+				action: 'Publish a workflow',
 			},
 			{
 				name: 'Create',
@@ -38,9 +38,9 @@ export const workflowOperations: INodeProperties[] = [
 				},
 			},
 			{
-				name: 'Deactivate',
+				name: 'Unpublish',
 				value: 'deactivate',
-				action: 'Deactivate a workflow',
+				action: 'Unpublish a workflow',
 			},
 			{
 				name: 'Delete',
@@ -70,6 +70,11 @@ export const workflowOperations: INodeProperties[] = [
 				},
 			},
 			{
+				name: 'Get Version',
+				value: 'getVersion',
+				action: 'Get a workflow version',
+			},
+			{
 				name: 'Update',
 				value: 'update',
 				action: 'Update a workflow',
@@ -94,9 +99,66 @@ const activateOperation: INodeProperties[] = [
 		routing: {
 			request: {
 				method: 'POST',
-				url: '=/workflows/{{ $value }}/activate',
+				url: '=/workflows/{{ toPathSegment($value) }}/activate',
 			},
 		},
+	},
+	{
+		displayName: 'Additional Fields',
+		name: 'additionalFields',
+		type: 'collection',
+		placeholder: 'Add Field',
+		default: {},
+		displayOptions: {
+			show: {
+				resource: ['workflow'],
+				operation: ['activate'],
+			},
+		},
+		options: [
+			{
+				displayName: 'Version ID',
+				name: 'versionId',
+				type: 'string',
+				default: '',
+				routing: {
+					send: {
+						type: 'body',
+						property: 'versionId',
+					},
+				},
+				description: 'The version ID of the workflow to publish',
+			},
+			{
+				displayName: 'Name',
+				name: 'name',
+				type: 'string',
+				default: '',
+				routing: {
+					send: {
+						type: 'body',
+						property: 'name',
+					},
+				},
+				description: 'Published version name (will be overwritten)',
+			},
+			{
+				displayName: 'Description',
+				name: 'description',
+				type: 'string',
+				typeOptions: {
+					rows: 4,
+				},
+				default: '',
+				routing: {
+					send: {
+						type: 'body',
+						property: 'description',
+					},
+				},
+				description: 'Published version description (will be overwritten)',
+			},
+		],
 	},
 ];
 
@@ -124,7 +186,7 @@ const createOperation: INodeProperties[] = [
 			},
 		},
 		description:
-			"A valid JSON object with required fields: 'name', 'nodes', 'connections' and 'settings'. More information can be found in the <a href=\"https://docs.n8n.io/api/api-reference/#tag/Workflow/paths/~1workflows/post\">documentation</a>.",
+			"A valid JSON object with required fields: 'name', 'nodes', 'connections' and 'settings'. More information can be found in the <a href=\"https://docs.n8n.io/connect/n8n-api/workflow#post-workflows\">documentation</a>.",
 	},
 ];
 
@@ -141,7 +203,7 @@ const deactivateOperation: INodeProperties[] = [
 		routing: {
 			request: {
 				method: 'POST',
-				url: '=/workflows/{{ $value }}/deactivate',
+				url: '=/workflows/{{ toPathSegment($value) }}/deactivate',
 			},
 		},
 	},
@@ -160,7 +222,7 @@ const deleteOperation: INodeProperties[] = [
 		routing: {
 			request: {
 				method: 'DELETE',
-				url: '=/workflows/{{ $value }}',
+				url: '=/workflows/{{ toPathSegment($value) }}',
 			},
 		},
 	},
@@ -218,7 +280,7 @@ const getAllOperation: INodeProperties[] = [
 		},
 		options: [
 			{
-				displayName: 'Return Only Active Workflows',
+				displayName: 'Return Only Published Workflows',
 				name: 'activeWorkflows',
 				type: 'boolean',
 				default: true,
@@ -303,9 +365,42 @@ const getOperation: INodeProperties[] = [
 		routing: {
 			request: {
 				method: 'GET',
-				url: '=/workflows/{{ $value }}',
+				url: '=/workflows/{{ toPathSegment($value) }}',
 			},
 		},
+	},
+];
+
+const getVersionOperation: INodeProperties[] = [
+	{
+		...workflowIdLocator,
+		required: true,
+		displayOptions: {
+			show: {
+				resource: ['workflow'],
+				operation: ['getVersion'],
+			},
+		},
+		routing: {
+			request: {
+				method: 'GET',
+				url: '=/workflows/{{ toPathSegment($value) }}/{{ toPathSegment($parameter["versionId"]) }}',
+			},
+		},
+	},
+	{
+		displayName: 'Version ID',
+		name: 'versionId',
+		type: 'string',
+		default: '',
+		required: true,
+		displayOptions: {
+			show: {
+				resource: ['workflow'],
+				operation: ['getVersion'],
+			},
+		},
+		description: 'The version ID to retrieve',
 	},
 ];
 
@@ -322,7 +417,7 @@ const updateOperation: INodeProperties[] = [
 		routing: {
 			request: {
 				method: 'PUT',
-				url: '=/workflows/{{ $value }}',
+				url: '=/workflows/{{ toPathSegment($value) }}',
 			},
 		},
 	},
@@ -349,7 +444,7 @@ const updateOperation: INodeProperties[] = [
 			},
 		},
 		description:
-			"A valid JSON object with required fields: 'name', 'nodes', 'connections' and 'settings'. More information can be found in the <a href=\"https://docs.n8n.io/api/api-reference/#tag/Workflow/paths/~1workflows~1%7Bid%7D/put\">documentation</a>.",
+			"A valid JSON object with required fields: 'name', 'nodes', 'connections' and 'settings'. More information can be found in the <a href=\"https://docs.n8n.io/connect/n8n-api/workflow#put-workflows-workflowid\">documentation</a>.",
 	},
 ];
 
@@ -360,5 +455,6 @@ export const workflowFields: INodeProperties[] = [
 	...deleteOperation,
 	...getAllOperation,
 	...getOperation,
+	...getVersionOperation,
 	...updateOperation,
 ];

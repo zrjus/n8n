@@ -10,6 +10,7 @@ import type {
 } from 'n8n-workflow';
 
 import { NodeExecutionContext } from './node-execution-context';
+import { getDataTableHelperFunctions } from './utils/data-table-helper-functions';
 import { extractValue } from './utils/extract-value';
 import { getRequestHelperFunctions } from './utils/request-helper-functions';
 import { getSSHTunnelFunctions } from './utils/ssh-tunnel-helper-functions';
@@ -28,11 +29,22 @@ export class LoadOptionsContext extends NodeExecutionContext implements ILoadOpt
 		this.helpers = {
 			...getSSHTunnelFunctions(),
 			...getRequestHelperFunctions(workflow, node, additionalData),
+			...getDataTableHelperFunctions(additionalData, workflow, node),
 		};
 	}
 
+	/**
+	 * Design-time parameter loading has no `runExecutionData`, so the base implementation
+	 * has no execution context to offer. Fall back to the one the entry point put on
+	 * `additionalData` — without this, `_getCredentials` overwrites it with `undefined`
+	 * right before decrypting, and end-user credentials silently fall back to static data.
+	 */
+	override getExecutionContext() {
+		return super.getExecutionContext() ?? this.additionalData.executionContext;
+	}
+
 	async getCredentials<T extends object = ICredentialDataDecryptedObject>(type: string) {
-		return await this._getCredentials<T>(type);
+		return await this._getRunlessCredentials<T>(type);
 	}
 
 	getCurrentNodeParameter(

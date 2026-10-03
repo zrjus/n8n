@@ -1,6 +1,7 @@
 <script lang="ts" setup generic="Item extends DatatableRow">
 import { computed, ref } from 'vue';
 
+import type { DatatableProps } from './Datatable.types';
 import { useI18n } from '../../composables/useI18n';
 import type { DatatableColumn, DatatableRow, DatatableRowDataType } from '../../types';
 import { getValueByPath } from '../../utils';
@@ -11,16 +12,8 @@ import N8nTableBase from '../TableBase';
 
 const ALL_ROWS = -1;
 
-interface DatatableProps {
-	columns: DatatableColumn[];
-	rows: Item[];
-	currentPage?: number;
-	pagination?: boolean;
-	rowsPerPage?: number;
-}
-
 defineOptions({ name: 'N8nDatatable' });
-const props = withDefaults(defineProps<DatatableProps>(), {
+const props = withDefaults(defineProps<DatatableProps<Item>>(), {
 	currentPage: 1,
 	pagination: true,
 	rowsPerPage: 10,
@@ -109,16 +102,17 @@ function getThStyle(column: DatatableColumn) {
 			</tbody>
 		</N8nTableBase>
 
+		<slot name="postdata" />
+
 		<div class="pagination">
 			<N8nPagination
 				v-if="totalPages > 1"
-				background
-				:pager-count="5"
-				:page-size="rowsPerPage"
-				layout="prev, pager, next"
+				:page="currentPage"
+				:items-per-page="rowsPerPage"
 				:total="totalRows"
-				:current-page="currentPage"
-				@update:current-page="onUpdateCurrentPage"
+				:show-total="false"
+				:show-sizes="false"
+				@update:page="onUpdateCurrentPage"
 			/>
 
 			<div class="pageSizeSelector">
@@ -155,7 +149,7 @@ function getThStyle(column: DatatableColumn) {
 	align-items: center;
 	bottom: 0;
 	overflow: visible;
-	margin-top: var(--spacing-s);
+	margin-top: var(--spacing--sm);
 }
 
 .pageSizeSelector {

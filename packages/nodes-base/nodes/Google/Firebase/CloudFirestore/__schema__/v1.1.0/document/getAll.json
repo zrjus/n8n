@@ -13,9 +13,21 @@
         "_updateTime": {
             "type": "string"
         },
+        "createTime": {
+            "type": "string"
+        },
+        "id": {
+            "type": "string"
+        },
         "name": {
+            "type": "string"
+        },
+        "updatedAt": {
+            "type": "string"
+        },
+        "updateTime": {
             "type": "string"
         }
     },
-    "version": 2
+    "version": 5
 }

@@ -4,12 +4,6 @@
         "agreedToTerms": {
             "type": "boolean"
         },
-        "aliases": {
-            "type": "array",
-            "items": {
-                "type": "string"
-            }
-        },
         "archived": {
             "type": "boolean"
         },
@@ -63,6 +57,9 @@
         "isEnrolledIn2Sv": {
             "type": "boolean"
         },
+        "isGuestUser": {
+            "type": "boolean"
+        },
         "isMailboxSetup": {
             "type": "boolean"
         },
@@ -100,16 +97,33 @@
                 }
             }
         },
-        "nonEditableAliases": {
+        "organizations": {
             "type": "array",
             "items": {
-                "type": "string"
+                "type": "object",
+                "properties": {
+                    "customType": {
+                        "type": "string"
+                    },
+                    "department": {
+                        "type": "string"
+                    },
+                    "primary": {
+                        "type": "boolean"
+                    },
+                    "title": {
+                        "type": "string"
+                    }
+                }
             }
         },
         "orgUnitPath": {
             "type": "string"
         },
         "primaryEmail": {
+            "type": "string"
+        },
+        "recoveryEmail": {
             "type": "string"
         },
         "suspended": {
@@ -122,5 +136,5 @@
             "type": "string"
         }
     },
-    "version": 1
+    "version": 4
 }

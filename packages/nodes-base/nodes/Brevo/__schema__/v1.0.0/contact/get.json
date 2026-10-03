@@ -1,6 +1,17 @@
 {
     "type": "object",
     "properties": {
+        "attributes": {
+            "type": "object",
+            "properties": {
+                "FIRSTNAME": {
+                    "type": "string"
+                },
+                "LASTNAME": {
+                    "type": "string"
+                }
+            }
+        },
         "createdAt": {
             "type": "string"
         },
@@ -24,7 +35,10 @@
         },
         "smsBlacklisted": {
             "type": "boolean"
+        },
+        "whatsappBlacklisted": {
+            "type": "boolean"
         }
     },
-    "version": 1
+    "version": 3
 }

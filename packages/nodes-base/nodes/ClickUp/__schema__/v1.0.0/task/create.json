@@ -9,6 +9,9 @@
             "items": {
                 "type": "object",
                 "properties": {
+                    "color": {
+                        "type": "string"
+                    },
                     "email": {
                         "type": "string"
                     },
@@ -55,12 +58,18 @@
                     "name": {
                         "type": "string"
                     },
+                    "required": {
+                        "type": "boolean"
+                    },
                     "type": {
                         "type": "string"
                     },
                     "type_config": {
                         "type": "object",
                         "properties": {
+                            "new_drop_down": {
+                                "type": "boolean"
+                            },
                             "options": {
                                 "type": "array",
                                 "items": {
@@ -86,6 +95,9 @@
                 }
             }
         },
+        "custom_id": {
+            "type": "null"
+        },
         "custom_item_id": {
             "type": "integer"
         },
@@ -102,6 +114,9 @@
             "type": "object",
             "properties": {
                 "access": {
+                    "type": "boolean"
+                },
+                "hidden": {
                     "type": "boolean"
                 },
                 "id": {
@@ -145,6 +160,9 @@
             "type": "object",
             "properties": {
                 "access": {
+                    "type": "boolean"
+                },
+                "hidden": {
                     "type": "boolean"
                 },
                 "id": {
@@ -259,5 +277,5 @@
             }
         }
     },
-    "version": 1
+    "version": 5
 }

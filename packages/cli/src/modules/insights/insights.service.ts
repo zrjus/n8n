@@ -1,70 +1,127 @@
-import { type InsightsSummary, type InsightsDateRange } from '@n8n/api-types';
+import {
+	type InsightsByTime,
+	type InsightsSummary,
+	type RestrictedInsightsByTime,
+} from '@n8n/api-types';
 import { LicenseState, Logger } from '@n8n/backend-common';
-import { OnLeaderStepdown, OnLeaderTakeover } from '@n8n/decorators';
-import { Service } from '@n8n/di';
+import { WorkflowSharingService } from '@n8n/backend-services';
+import type { User } from '@n8n/db';
+import { Container, Service } from '@n8n/di';
+import { DateTime } from 'luxon';
 import { InstanceSettings } from 'n8n-core';
 import { UserError } from 'n8n-workflow';
 
-import type { PeriodUnit, TypeUnit } from './database/entities/insights-shared';
-import { NumberToType, TypeToNumber } from './database/entities/insights-shared';
+import { ForbiddenError } from '@n8n/errors';
+import { userHasScopes } from '@/permissions.ee/check-access';
+
+import type { PeriodUnit, TypeUnit, ByTimeInsightType } from './database/entities/insights-shared';
+import { NumberToType } from './database/entities/insights-shared';
+import type { InsightsAccessFilter } from './database/repositories/insights-by-period.repository';
 import { InsightsByPeriodRepository } from './database/repositories/insights-by-period.repository';
-import { InsightsCollectionService } from './insights-collection.service';
-import { InsightsCompactionService } from './insights-compaction.service';
-import { InsightsPruningService } from './insights-pruning.service';
-import { INSIGHTS_DATE_RANGE_KEYS, keyRangeToDays } from './insights.constants';
+
+const BY_TIME_INSIGHT_TYPES: ByTimeInsightType[] = [
+	'time_saved_min',
+	'runtime_ms',
+	'success',
+	'failure',
+];
+
+type InsightsDateRangeQuery = {
+	user: User;
+	startDate: Date;
+	endDate: Date;
+	projectId?: string;
+	timeZone?: string;
+};
 
 @Service()
 export class InsightsService {
 	constructor(
 		private readonly insightsByPeriodRepository: InsightsByPeriodRepository,
-		private readonly compactionService: InsightsCompactionService,
-		private readonly collectionService: InsightsCollectionService,
-		private readonly pruningService: InsightsPruningService,
 		private readonly licenseState: LicenseState,
 		private readonly instanceSettings: InstanceSettings,
 		private readonly logger: Logger,
+		private readonly workflowSharingService: WorkflowSharingService,
 	) {
 		this.logger = this.logger.scoped('insights');
 	}
 
-	settings() {
-		return {
-			summary: this.licenseState.isInsightsSummaryLicensed(),
-			dashboard: this.licenseState.isInsightsDashboardLicensed(),
-			dateRanges: this.getAvailableDateRanges(),
-		};
-	}
+	private async toggleCollectionService(enable: boolean) {
+		if (
+			this.instanceSettings.instanceType !== 'main' &&
+			this.instanceSettings.instanceType !== 'webhook'
+		) {
+			this.logger.debug('Instance is not main or webhook, skipping collection');
+			return;
+		}
 
-	startTimers() {
-		this.collectionService.startFlushingTimer();
-
-		if (this.instanceSettings.isLeader) this.startCompactionAndPruningTimers();
-	}
-
-	@OnLeaderTakeover()
-	startCompactionAndPruningTimers() {
-		this.compactionService.startCompactionTimer();
-		if (this.pruningService.isPruningEnabled) {
-			this.pruningService.startPruningTimer();
+		const { InsightsCollectionService } = await import('./insights-collection.service.js');
+		const collectionService = Container.get(InsightsCollectionService);
+		if (enable) {
+			collectionService.init();
+		} else {
+			await collectionService.shutdown();
 		}
 	}
 
-	@OnLeaderStepdown()
-	stopCompactionAndPruningTimers() {
-		this.compactionService.stopCompactionTimer();
-		this.pruningService.stopPruningTimer();
+	async init() {
+		await this.toggleCollectionService(true);
 	}
 
 	async shutdown() {
-		await this.collectionService.shutdown();
-		this.stopCompactionAndPruningTimers();
+		await this.toggleCollectionService(false);
+	}
+
+	/**
+	 * Resolves what insights the caller may read. A requested project must be
+	 * readable by them. When no specific project is requested, results are limited to the
+	 * workflows they can read.
+	 *
+	 * Returns the filter to apply, or `undefined` when the caller's global role
+	 * already grants access to every workflow.
+	 */
+	private async resolveAccessFilter(
+		user: User,
+		projectId?: string,
+	): Promise<InsightsAccessFilter | undefined> {
+		if (projectId) {
+			const userHasRequiredProjectScopes = await userHasScopes(user, ['workflow:read'], false, {
+				projectId,
+			});
+			if (!userHasRequiredProjectScopes) {
+				throw new ForbiddenError('You do not have access to insights for this project.');
+			}
+		}
+
+		const workflowReadRoles = await this.workflowSharingService.rolesGrantingScope(
+			user,
+			'workflow:read',
+		);
+
+		return workflowReadRoles && { user, ...workflowReadRoles };
 	}
 
 	async getInsightsSummary({
-		periodLengthInDays,
-	}: { periodLengthInDays: number }): Promise<InsightsSummary> {
+		user,
+		startDate,
+		endDate,
+		projectId,
+		timeZone,
+	}: {
+		user: User;
+		projectId?: string;
+		startDate: Date;
+		endDate: Date;
+		timeZone?: string;
+	}): Promise<InsightsSummary> {
+		const accessFilter = await this.resolveAccessFilter(user, projectId);
+
 		const rows = await this.insightsByPeriodRepository.getPreviousAndCurrentPeriodTypeAggregates({
-			periodLengthInDays,
+			startDate,
+			endDate,
+			projectId,
+			timeZone,
+			accessFilter,
 		});
 
 		// Initialize data structures for both periods
@@ -147,107 +204,207 @@ export class InsightsService {
 	}
 
 	async getInsightsByWorkflow({
-		maxAgeInDays,
+		user,
 		skip = 0,
 		take = 10,
 		sortBy = 'total:desc',
+		projectId,
+		startDate,
+		endDate,
+		timeZone,
 	}: {
-		maxAgeInDays: number;
+		user: User;
 		skip?: number;
 		take?: number;
 		sortBy?: string;
+		projectId?: string;
+		startDate: Date;
+		endDate: Date;
+		timeZone?: string;
 	}) {
+		const accessFilter = await this.resolveAccessFilter(user, projectId);
+
 		const { count, rows } = await this.insightsByPeriodRepository.getInsightsByWorkflow({
-			maxAgeInDays,
+			startDate,
+			endDate,
 			skip,
 			take,
 			sortBy,
+			projectId,
+			timeZone,
+			accessFilter,
 		});
+
+		// A non-null means the caller can read it; null means the workflow has since been deleted.
+		const data = rows.map((row) => ({
+			...row,
+			hasReadAccess: row.workflowId !== null,
+		}));
 
 		return {
 			count,
-			data: rows,
+			data,
 		};
 	}
 
 	async getInsightsByTime({
-		maxAgeInDays,
-		periodUnit,
-		// Default to all insight types
-		insightTypes = Object.keys(TypeToNumber) as TypeUnit[],
-	}: { maxAgeInDays: number; periodUnit: PeriodUnit; insightTypes?: TypeUnit[] }) {
-		const rows = await this.insightsByPeriodRepository.getInsightsByTime({
-			maxAgeInDays,
-			periodUnit,
-			insightTypes,
+		user,
+		startDate,
+		endDate,
+		projectId,
+		timeZone,
+	}: InsightsDateRangeQuery): Promise<InsightsByTime[]> {
+		const rows = await this.queryInsightsByTime({
+			user,
+			startDate,
+			endDate,
+			projectId,
+			timeZone,
+			insightTypes: BY_TIME_INSIGHT_TYPES,
 		});
 
 		return rows.map((r) => {
-			const { periodStart, runTime, ...rest } = r;
-			const values: typeof rest & {
-				total?: number;
-				successRate?: number;
-				failureRate?: number;
-				averageRunTime?: number;
-			} = rest;
+			const succeeded = r.succeeded ?? 0;
+			const failed = r.failed ?? 0;
+			const total = succeeded + failed;
+			const runTime = r.runTime ?? 0;
 
-			// Compute ratio if total has been computed
-			if (typeof r.succeeded === 'number' && typeof r.failed === 'number') {
-				const total = r.succeeded + r.failed;
-				values.total = total;
-				values.failureRate = total ? r.failed / total : 0;
-				if (typeof runTime === 'number') {
-					values.averageRunTime = total ? runTime / total : 0;
-				}
-			}
 			return {
 				date: r.periodStart,
-				values,
+				values: {
+					total,
+					succeeded,
+					failed,
+					failureRate: total > 0 ? failed / total : 0,
+					averageRunTime: total > 0 ? runTime / total : 0,
+					timeSaved: r.timeSaved ?? 0,
+				},
 			};
 		});
 	}
 
-	getMaxAgeInDaysAndGranularity(
-		dateRangeKey: InsightsDateRange['key'],
-	): InsightsDateRange & { maxAgeInDays: number } {
-		const dateRange = this.getAvailableDateRanges().find((range) => range.key === dateRangeKey);
+	async getTimeSavedInsightsByTime({
+		user,
+		startDate,
+		endDate,
+		projectId,
+		timeZone,
+	}: InsightsDateRangeQuery): Promise<RestrictedInsightsByTime[]> {
+		const rows = await this.queryInsightsByTime({
+			user,
+			startDate,
+			endDate,
+			projectId,
+			timeZone,
+			insightTypes: ['time_saved_min'],
+		});
 
-		if (!dateRange) {
-			// Not supposed to happen if we trust the dateRangeKey type
-			throw new UserError('The selected date range is not available');
-		}
+		return rows.map((r) => ({
+			date: r.periodStart,
+			values: { timeSaved: r.timeSaved ?? 0 },
+		}));
+	}
 
-		if (!dateRange.licensed) {
-			throw new UserError(
-				'The selected date range exceeds the maximum history allowed by your license.',
-			);
-		}
-
-		return { ...dateRange, maxAgeInDays: keyRangeToDays[dateRangeKey] };
+	/** The start of the oldest insights period of any bucket size, or `null` without data. */
+	async getEarliestDataDate() {
+		return await this.insightsByPeriodRepository.getEarliestDataDate();
 	}
 
 	/**
-	 * Returns the available date ranges with their license authorization and time granularity
-	 * when grouped by time.
+	 * Succeeded plus failed executions of all workflows for each UTC day from
+	 * `startDate` to `endDate`, both inclusive, keyed by `YYYY-MM-DD`. A day
+	 * without executions has no entry.
+	 *
+	 * Unlike {@link getInsightsByTime}, this buckets by day for any range length.
 	 */
-	getAvailableDateRanges(): DateRange[] {
+	async getDailyExecutionTotals({
+		startDate,
+		endDate,
+	}: { startDate: Date; endDate: Date }): Promise<Map<string, number>> {
+		const rows = await this.insightsByPeriodRepository.getInsightsByTime({
+			periodUnit: 'day',
+			insightTypes: ['success', 'failure'],
+			startDate,
+			endDate,
+			timeZone: 'UTC',
+		});
+
+		return new Map(
+			rows.map((row) => [row.periodStart.slice(0, 10), (row.succeeded ?? 0) + (row.failed ?? 0)]),
+		);
+	}
+
+	private async queryInsightsByTime({
+		user,
+		startDate,
+		endDate,
+		projectId,
+		timeZone,
+		insightTypes,
+	}: InsightsDateRangeQuery & { insightTypes: ByTimeInsightType[] }) {
+		const accessFilter = await this.resolveAccessFilter(user, projectId);
+		const periodUnit = this.getDateFiltersGranularity({ startDate, endDate });
+
+		return await this.insightsByPeriodRepository.getInsightsByTime({
+			periodUnit,
+			insightTypes,
+			projectId,
+			startDate,
+			endDate,
+			timeZone,
+			accessFilter,
+		});
+	}
+
+	/**
+	 * Checks if the selected date range is compliant with the license
+	 *
+	 * - If the granularity is 'hour', checks if the license allows hourly data access
+	 * - Checks if the start date is within the allowed history range
+	 *
+	 * @throws {UserError} if the license does not allow the selected date range
+	 */
+	validateDateFiltersLicense({ startDate, endDate }: { startDate: Date; endDate: Date }) {
+		// we use `startOf('day')` because the license limits are based on full days
+		const today = DateTime.now().startOf('day');
+		const startDateStartOfDay = DateTime.fromJSDate(startDate).startOf('day');
+		const daysToStartDate = today.diff(startDateStartOfDay, 'days').days;
+
+		const granularity = this.getDateFiltersGranularity({ startDate, endDate });
+
 		const maxHistoryInDays =
 			this.licenseState.getInsightsMaxHistory() === -1
 				? Number.MAX_SAFE_INTEGER
 				: this.licenseState.getInsightsMaxHistory();
 		const isHourlyDateLicensed = this.licenseState.isInsightsHourlyDataLicensed();
 
-		return INSIGHTS_DATE_RANGE_KEYS.map((key) => ({
-			key,
-			licensed:
-				key === 'day' ? (isHourlyDateLicensed ?? false) : maxHistoryInDays >= keyRangeToDays[key],
-			granularity: key === 'day' ? 'hour' : keyRangeToDays[key] <= 30 ? 'day' : 'week',
-		}));
+		if (granularity === 'hour' && !isHourlyDateLicensed) {
+			throw new UserError('Hourly data is not available with your current license');
+		}
+
+		if (maxHistoryInDays < daysToStartDate) {
+			throw new UserError(
+				'The selected date range exceeds the maximum history allowed by your license',
+			);
+		}
+	}
+
+	private getDateFiltersGranularity({
+		startDate,
+		endDate,
+	}: { startDate: Date; endDate: Date }): PeriodUnit {
+		const startDateTime = DateTime.fromJSDate(startDate);
+		const endDateTime = DateTime.fromJSDate(endDate);
+		const differenceInDays = endDateTime.diff(startDateTime, 'days').days;
+
+		if (differenceInDays < 1) {
+			return 'hour';
+		}
+
+		if (differenceInDays <= 30) {
+			return 'day';
+		}
+
+		return 'week';
 	}
 }
-
-type DateRange = {
-	key: 'day' | 'week' | '2weeks' | 'month' | 'quarter' | '6months' | 'year';
-	licensed: boolean;
-	granularity: 'hour' | 'day' | 'week';
-};

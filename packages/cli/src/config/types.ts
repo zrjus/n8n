@@ -40,6 +40,7 @@ type JoinByDotting<T extends string[]> = T extends [infer F]
 
 type ToDottedPath<T> = JoinByDotting<RemoveExcess<T>>;
 
+// oxlint-disable-next-line typescript/no-deprecated
 type CollectPathsByType<T> = ToDottedPath<GetPathSegments<typeof schema, T>>;
 
 // -----------------------------------
@@ -76,7 +77,6 @@ type ToReturnType<T extends ConfigOptionPath> = T extends NumericPath
 type ExceptionPaths = {
 	'queue.bull.redis': RedisOptions;
 	processedDataManager: IProcessedDataConfig;
-	'userManagement.isInstanceOwnerSetUp': boolean;
 	'ui.banners.dismissed': string[] | undefined;
 	easyAIWorkflowOnboarded: boolean | undefined;
 };
@@ -102,6 +102,7 @@ type ToStringLiteralMap<T extends { path: string; union: string }> = {
 };
 
 type StringLiteralMap = ToStringLiteralMap<
+	// oxlint-disable-next-line typescript/no-deprecated
 	ToPathUnionPair<GetPathSegmentsWithUnions<typeof schema>>
 >;
 

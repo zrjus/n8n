@@ -19,6 +19,25 @@
         "approval_set": {
             "type": "string"
         },
+        "assigned_to": {
+            "type": "object",
+            "properties": {
+                "link": {
+                    "type": "string"
+                }
+            }
+        },
+        "assignment_group": {
+            "type": "object",
+            "properties": {
+                "link": {
+                    "type": "string"
+                },
+                "value": {
+                    "type": "string"
+                }
+            }
+        },
         "business_duration": {
             "type": "string"
         },
@@ -45,9 +64,6 @@
                 }
             }
         },
-        "category": {
-            "type": "string"
-        },
         "cause": {
             "type": "string"
         },
@@ -68,6 +84,14 @@
         },
         "comments_and_work_notes": {
             "type": "string"
+        },
+        "company": {
+            "type": "object",
+            "properties": {
+                "link": {
+                    "type": "string"
+                }
+            }
         },
         "contract": {
             "type": "string"
@@ -120,12 +144,6 @@
         "notify": {
             "type": "string"
         },
-        "number": {
-            "type": "string"
-        },
-        "opened_at": {
-            "type": "string"
-        },
         "opened_by": {
             "type": "object",
             "properties": {
@@ -149,7 +167,7 @@
         "parent": {
             "type": "string"
         },
-        "priority": {
+        "parent_incident": {
             "type": "string"
         },
         "problem_id": {
@@ -170,25 +188,33 @@
         "resolved_at": {
             "type": "string"
         },
+        "resolved_by": {
+            "type": "object",
+            "properties": {
+                "link": {
+                    "type": "string"
+                },
+                "value": {
+                    "type": "string"
+                }
+            }
+        },
         "rfc": {
             "type": "string"
         },
         "route_reason": {
             "type": "string"
         },
-        "severity": {
+        "service_offering": {
             "type": "string"
         },
-        "short_description": {
+        "severity": {
             "type": "string"
         },
         "sla_due": {
             "type": "string"
         },
         "state": {
-            "type": "string"
-        },
-        "subcategory": {
             "type": "string"
         },
         "sys_class_name": {
@@ -224,9 +250,6 @@
             "type": "string"
         },
         "sys_updated_by": {
-            "type": "string"
-        },
-        "sys_updated_on": {
             "type": "string"
         },
         "task_effective_number": {
@@ -266,5 +289,5 @@
             "type": "string"
         }
     },
-    "version": 1
+    "version": 5
 }

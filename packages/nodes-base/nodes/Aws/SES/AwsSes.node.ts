@@ -11,6 +11,7 @@ import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 import qs from 'node:querystring';
 
 import { awsApiRequestSOAP, awsApiRequestSOAPAllItems } from './GenericFunctions';
+import { awsNodeAuthOptions, awsNodeCredentials } from '../utils';
 
 function setParameter(params: string[], base: string, values: string[]) {
 	for (let i = 0; i < values.length; i++) {
@@ -27,19 +28,16 @@ export class AwsSes implements INodeType {
 		version: 1,
 		subtitle: '={{$parameter["operation"] + ": " + $parameter["resource"]}}',
 		description: 'Sends data to AWS SES',
+		schemaPath: 'Aws/SES',
 		defaults: {
 			name: 'AWS SES',
 		},
 		usableAsTool: true,
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],
-		credentials: [
-			{
-				name: 'aws',
-				required: true,
-			},
-		],
+		credentials: awsNodeCredentials,
 		properties: [
+			awsNodeAuthOptions,
 			{
 				displayName: 'Resource',
 				name: 'resource',
@@ -869,7 +867,7 @@ export class AwsSes implements INodeType {
 
 						const params = [
 							'Action=DeleteCustomVerificationEmailTemplate',
-							`TemplateName=${templateName}`,
+							`TemplateName=${encodeURIComponent(templateName)}`,
 						];
 
 						responseData = await awsApiRequestSOAP.call(
@@ -886,7 +884,7 @@ export class AwsSes implements INodeType {
 					if (operation === 'get') {
 						const templateName = this.getNodeParameter('templateName', i) as string;
 
-						const params = [`TemplateName=${templateName}`];
+						const params = [`TemplateName=${encodeURIComponent(templateName)}`];
 
 						responseData = await awsApiRequestSOAP.call(
 							this,
@@ -927,7 +925,7 @@ export class AwsSes implements INodeType {
 					}
 
 					if (operation === 'send') {
-						const email = this.getNodeParameter('email', i) as string[];
+						const email = this.getNodeParameter('email', i) as string;
 
 						const templateName = this.getNodeParameter('templateName', i) as string;
 
@@ -935,12 +933,14 @@ export class AwsSes implements INodeType {
 
 						const params = [
 							'Action=SendCustomVerificationEmail',
-							`TemplateName=${templateName}`,
-							`EmailAddress=${email}`,
+							`TemplateName=${encodeURIComponent(templateName)}`,
+							`EmailAddress=${encodeURIComponent(email)}`,
 						];
 
 						if (additionalFields.configurationSetName) {
-							params.push(`ConfigurationSetName=${additionalFields.configurationSetName}`);
+							params.push(
+								`ConfigurationSetName=${encodeURIComponent(additionalFields.configurationSetName as string)}`,
+							);
 						}
 
 						responseData = await awsApiRequestSOAP.call(
@@ -961,27 +961,35 @@ export class AwsSes implements INodeType {
 
 						const params = [
 							'Action=UpdateCustomVerificationEmailTemplate',
-							`TemplateName=${templateName}`,
+							`TemplateName=${encodeURIComponent(templateName)}`,
 						];
 
 						if (updateFields.FailureRedirectionURL) {
-							params.push(`FailureRedirectionURL=${updateFields.FailureRedirectionURL}`);
+							params.push(
+								`FailureRedirectionURL=${encodeURIComponent(updateFields.FailureRedirectionURL as string)}`,
+							);
 						}
 
 						if (updateFields.email) {
-							params.push(`FromEmailAddress=${updateFields.email}`);
+							params.push(`FromEmailAddress=${encodeURIComponent(updateFields.email as string)}`);
 						}
 
 						if (updateFields.successRedirectionURL) {
-							params.push(`SuccessRedirectionURL=${updateFields.successRedirectionURL}`);
+							params.push(
+								`SuccessRedirectionURL=${encodeURIComponent(updateFields.successRedirectionURL as string)}`,
+							);
 						}
 
 						if (updateFields.templateContent) {
-							params.push(`TemplateContent=${updateFields.templateContent}`);
+							params.push(
+								`TemplateContent=${encodeURIComponent(updateFields.templateContent as string)}`,
+							);
 						}
 
 						if (updateFields.templateSubject) {
-							params.push(`TemplateSubject=${updateFields.templateSubject}`);
+							params.push(
+								`TemplateSubject=${encodeURIComponent(updateFields.templateSubject as string)}`,
+							);
 						}
 
 						responseData = await awsApiRequestSOAP.call(
@@ -1033,19 +1041,25 @@ export class AwsSes implements INodeType {
 						}
 
 						if (additionalFields.configurationSetName) {
-							params.push(`ConfigurationSetName=${additionalFields.configurationSetName}`);
+							params.push(
+								`ConfigurationSetName=${encodeURIComponent(additionalFields.configurationSetName as string)}`,
+							);
 						}
 
 						if (additionalFields.returnPath) {
-							params.push(`ReturnPath=${additionalFields.returnPath}`);
+							params.push(
+								`ReturnPath=${encodeURIComponent(additionalFields.returnPath as string)}`,
+							);
 						}
 
 						if (additionalFields.returnPathArn) {
-							params.push(`ReturnPathArn=${additionalFields.returnPathArn}`);
+							params.push(
+								`ReturnPathArn=${encodeURIComponent(additionalFields.returnPathArn as string)}`,
+							);
 						}
 
 						if (additionalFields.sourceArn) {
-							params.push(`SourceArn=${additionalFields.sourceArn}`);
+							params.push(`SourceArn=${encodeURIComponent(additionalFields.sourceArn as string)}`);
 						}
 
 						if (additionalFields.replyToAddresses) {
@@ -1085,7 +1099,10 @@ export class AwsSes implements INodeType {
 						const fromEmail = this.getNodeParameter('fromEmail', i) as string;
 						const additionalFields = this.getNodeParameter('additionalFields', i);
 						const templateDataUi = this.getNodeParameter('templateDataUi', i) as IDataObject;
-						const params = [`Template=${template}`, `Source=${encodeURIComponent(fromEmail)}`];
+						const params = [
+							`Template=${encodeURIComponent(template)}`,
+							`Source=${encodeURIComponent(fromEmail)}`,
+						];
 
 						if (toAddresses.length) {
 							setParameter(params, 'Destination.ToAddresses.member', toAddresses);
@@ -1098,19 +1115,25 @@ export class AwsSes implements INodeType {
 						}
 
 						if (additionalFields.configurationSetName) {
-							params.push(`ConfigurationSetName=${additionalFields.configurationSetName}`);
+							params.push(
+								`ConfigurationSetName=${encodeURIComponent(additionalFields.configurationSetName as string)}`,
+							);
 						}
 
 						if (additionalFields.returnPath) {
-							params.push(`ReturnPath=${additionalFields.returnPath}`);
+							params.push(
+								`ReturnPath=${encodeURIComponent(additionalFields.returnPath as string)}`,
+							);
 						}
 
 						if (additionalFields.returnPathArn) {
-							params.push(`ReturnPathArn=${additionalFields.returnPathArn}`);
+							params.push(
+								`ReturnPathArn=${encodeURIComponent(additionalFields.returnPathArn as string)}`,
+							);
 						}
 
 						if (additionalFields.sourceArn) {
-							params.push(`SourceArn=${additionalFields.sourceArn}`);
+							params.push(`SourceArn=${encodeURIComponent(additionalFields.sourceArn as string)}`);
 						}
 
 						if (additionalFields.replyToAddresses) {
@@ -1195,7 +1218,7 @@ export class AwsSes implements INodeType {
 					if (operation === 'delete') {
 						const templateName = this.getNodeParameter('templateName', i) as string;
 
-						const params = [`TemplateName=${templateName}`];
+						const params = [`TemplateName=${encodeURIComponent(templateName)}`];
 
 						responseData = await awsApiRequestSOAP.call(
 							this,
@@ -1210,7 +1233,7 @@ export class AwsSes implements INodeType {
 					if (operation === 'get') {
 						const templateName = this.getNodeParameter('templateName', i) as string;
 
-						const params = [`TemplateName=${templateName}`];
+						const params = [`TemplateName=${encodeURIComponent(templateName)}`];
 
 						responseData = await awsApiRequestSOAP.call(
 							this,

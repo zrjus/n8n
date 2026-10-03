@@ -1,3 +1,5 @@
+import storybook from 'eslint-plugin-storybook';
+
 import { defineConfig } from 'eslint/config';
 import { frontendConfig } from '@n8n/eslint-config/frontend';
 
@@ -5,31 +7,18 @@ export default defineConfig(
 	frontendConfig,
 	{
 		rules: {
-			'vue/no-undef-components': 'error',
+			'vue/no-undef-components': ['error', { ignorePatterns: ['N8nDropdownMenuItem'] }],
 
-			// TODO: Remove these
-			'import-x/no-default-export': 'warn',
-			'no-empty': 'warn',
 			'no-prototype-builtins': 'warn',
-			'@typescript-eslint/no-unsafe-argument': 'warn',
-			'@typescript-eslint/no-unsafe-return': 'warn',
-			'@typescript-eslint/no-unsafe-member-access': 'warn',
 			'@typescript-eslint/prefer-optional-chain': 'warn',
-			'@typescript-eslint/prefer-nullish-coalescing': 'warn',
-			'@typescript-eslint/require-await': 'warn',
-			'@typescript-eslint/naming-convention': 'warn',
-			'@typescript-eslint/no-empty-object-type': 'warn',
-			'@typescript-eslint/no-unsafe-assignment': 'warn',
-			'@typescript-eslint/unbound-method': 'warn',
 			'@typescript-eslint/restrict-template-expressions': 'warn',
-			'@typescript-eslint/no-unsafe-call': 'warn',
 		},
 	},
 	{
 		files: ['src/**/*.stories.ts', 'src/**/*.vue', 'src/**/*.spec.ts'],
 		rules: {
 			'@typescript-eslint/naming-convention': [
-				'warn',
+				'off',
 				{
 					selector: ['variable', 'property'],
 					format: ['PascalCase', 'camelCase', 'UPPER_CASE'],
@@ -49,4 +38,5 @@ export default defineConfig(
 			],
 		},
 	},
+	storybook.configs['flat/recommended'],
 );

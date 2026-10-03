@@ -9,21 +9,23 @@ import { strict as assert } from 'node:assert';
 import http from 'node:http';
 import type { Server } from 'node:http';
 
+import { inE2ETests } from '@/constants';
 import { CredentialsOverwrites } from '@/credentials-overwrites';
 import { CredentialsOverwritesAlreadySetError } from '@/errors/credentials-overwrites-already-set.error';
 import { NonJsonBodyError } from '@/errors/non-json-body.error';
 import { ExternalHooks } from '@/external-hooks';
 import type { ICredentialsOverwrite } from '@/interfaces';
-import { PrometheusMetricsService } from '@/metrics/prometheus-metrics.service';
+import { PrometheusMetricsService } from '@/metrics/prometheus';
 import { rawBodyReader, bodyParser } from '@/middlewares';
 import * as ResponseHelper from '@/response-helper';
-import { RedisClientService } from '@/services/redis-client.service';
+import { RedisClientService } from '@n8n/backend-services';
+import { resolveBackendHealthEndpointPath } from '@/utils/health-endpoint.util';
 
 export type WorkerServerEndpointsConfig = {
-	/** Whether the `/healthz` endpoint is enabled. */
+	/** Whether the health check endpoint is enabled. */
 	health: boolean;
 
-	/** Whether the [credentials overwrites endpoint](https://docs.n8n.io/embed/configuration/#credential-overwrites) is enabled. */
+	/** Whether the [credentials overwrites endpoint](https://docs.n8n.io/administer/manage-credentials/credential-overwrites#using-the-rest-api) is enabled. */
 	overwrites: boolean;
 
 	/** Whether the `/metrics` endpoint is enabled. */
@@ -46,6 +48,8 @@ export class WorkerServer {
 	private endpointsConfig: WorkerServerEndpointsConfig;
 
 	private overwritesLoaded = false;
+
+	private fullyReady = false;
 
 	constructor(
 		private readonly globalConfig: GlobalConfig,
@@ -80,8 +84,13 @@ export class WorkerServer {
 		});
 	}
 
+	/** Call once after all initialization is complete. Unblocks the /healthz/readiness endpoint. */
+	markAsReady() {
+		this.fullyReady = true;
+	}
+
 	async init(endpointsConfig: WorkerServerEndpointsConfig) {
-		assert(Object.values(endpointsConfig).some((e) => e));
+		assert(inE2ETests || Object.values(endpointsConfig).some((e) => e));
 
 		this.endpointsConfig = endpointsConfig;
 
@@ -102,10 +111,13 @@ export class WorkerServer {
 		const { health, overwrites, metrics } = this.endpointsConfig;
 
 		if (health) {
-			this.app.get('/healthz', async (_, res) => {
+			const healthPath = resolveBackendHealthEndpointPath(this.globalConfig);
+			const readinessPath = `${healthPath}/readiness`;
+
+			this.app.get(healthPath, async (_, res) => {
 				res.send({ status: 'ok' });
 			});
-			this.app.get('/healthz/readiness', async (_, res) => {
+			this.app.get(readinessPath, async (_, res) => {
 				await this.readiness(_, res);
 			});
 		}
@@ -113,13 +125,26 @@ export class WorkerServer {
 		if (overwrites) {
 			const { endpoint } = this.globalConfig.credentials.overwrite;
 
-			this.app.post(`/${endpoint}`, rawBodyReader, bodyParser, (req, res) =>
-				this.handleOverwrites(req, res),
-			);
+			const overwriteEndpointMiddleware =
+				this.credentialsOverwrites.getOverwriteEndpointMiddleware();
+
+			if (overwriteEndpointMiddleware) {
+				this.app.use(`/${endpoint}`, overwriteEndpointMiddleware);
+			}
+
+			this.app.post(`/${endpoint}`, rawBodyReader, bodyParser, async (req, res) => {
+				await this.handleOverwrites(req, res);
+			});
 		}
 
 		if (metrics) {
-			await this.prometheusMetricsService.init(this.app);
+			this.prometheusMetricsService.init(this.app);
+		}
+
+		// Workers have no REST server, so the test-only diagnostics routes live here.
+		if (inE2ETests) {
+			const { createE2EDiagnosticsRouter } = await import('@/services/e2e-diagnostics.router.js');
+			this.app.use(`/${this.globalConfig.endpoints.rest}/e2e`, createE2EDiagnosticsRouter());
 		}
 	}
 
@@ -128,33 +153,44 @@ export class WorkerServer {
 		const isReady =
 			connectionState.connected &&
 			connectionState.migrated &&
-			this.redisClientService.isConnected();
+			this.redisClientService.isConnected() &&
+			this.fullyReady;
 
 		return isReady
 			? res.status(200).send({ status: 'ok' })
 			: res.status(503).send({ status: 'error' });
 	}
 
-	private handleOverwrites(
+	private async handleOverwrites(
 		req: express.Request<{}, {}, ICredentialsOverwrite>,
 		res: express.Response,
 	) {
-		if (this.overwritesLoaded) {
-			ResponseHelper.sendErrorResponse(res, new CredentialsOverwritesAlreadySetError());
-			return;
+		try {
+			if (this.overwritesLoaded) {
+				ResponseHelper.sendErrorResponse(res, new CredentialsOverwritesAlreadySetError());
+				return;
+			}
+
+			if (req.contentType !== 'application/json') {
+				ResponseHelper.sendErrorResponse(res, new NonJsonBodyError());
+				return;
+			}
+
+			await this.credentialsOverwrites.setData(req.body, true);
+
+			this.overwritesLoaded = true;
+
+			this.logger.debug('Worker loaded credentials overwrites');
+
+			ResponseHelper.sendSuccessResponse(res, { success: true }, true, 200);
+		} catch (error) {
+			this.logger.error('Error handling credentials overwrites', { error });
+			ResponseHelper.sendErrorResponse(
+				res,
+				new Error(
+					'An error occurred while handling credentials overwrites, please check the logs for more details',
+				),
+			);
 		}
-
-		if (req.contentType !== 'application/json') {
-			ResponseHelper.sendErrorResponse(res, new NonJsonBodyError());
-			return;
-		}
-
-		this.credentialsOverwrites.setData(req.body);
-
-		this.overwritesLoaded = true;
-
-		this.logger.debug('Worker loaded credentials overwrites');
-
-		ResponseHelper.sendSuccessResponse(res, { success: true }, true, 200);
 	}
 }

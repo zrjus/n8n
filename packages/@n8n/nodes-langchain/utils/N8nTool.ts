@@ -1,6 +1,6 @@
 import type { DynamicStructuredToolInput } from '@langchain/core/tools';
 import { DynamicStructuredTool, DynamicTool } from '@langchain/core/tools';
-import { StructuredOutputParser } from 'langchain/output_parsers';
+import { StructuredOutputParser } from '@langchain/classic/output_parsers';
 import type { ISupplyDataFunctions, IDataObject } from 'n8n-workflow';
 import { NodeConnectionTypes, jsonParse, NodeOperationError } from 'n8n-workflow';
 import type { ZodTypeAny } from 'zod';
@@ -105,10 +105,12 @@ export class N8nTool extends DynamicStructuredTool<ZodObjectAny> {
 			}
 		};
 
-		return new DynamicTool({
+		const dynamicTool = new DynamicTool({
 			name,
 			description: prepareFallbackToolDescription(description, schema),
 			func: wrappedFunc,
 		});
+		dynamicTool.metadata = this.metadata;
+		return dynamicTool;
 	}
 }

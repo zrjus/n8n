@@ -2,10 +2,10 @@ import { globalIgnores } from 'eslint/config';
 import tseslint from 'typescript-eslint';
 import VuePlugin from 'eslint-plugin-vue';
 import eslintConfigPrettier from 'eslint-config-prettier/flat';
+import { configs as designSystemConfigs } from '@n8n/eslint-plugin-design-system';
 import globals from 'globals';
 import { baseConfig } from './base.js';
 
-const isCI = process.env.CI === 'true';
 const extraFileExtensions = ['.vue'];
 const allGlobals = { NodeJS: true, ...globals.node, ...globals.browser };
 
@@ -13,14 +13,18 @@ export const frontendConfig = tseslint.config(
 	globalIgnores(['**/*.js', '**/*.d.ts', 'vite.config.ts', '**/*.ts.snap']),
 	baseConfig,
 	VuePlugin.configs['flat/recommended'],
+	designSystemConfigs.recommended,
 	{
 		rules: {
 			'no-console': 'warn',
-			'no-debugger': isCI ? 'error' : 'off',
-			semi: [2, 'always'],
-			'comma-dangle': ['error', 'always-multiline'],
+
+			// A component file is PascalCase and a composable is `useThing.ts`, so
+			// the kebab-case default from the base layer does not apply here.
+			'unicorn/filename-case': 'off',
+
 			'@typescript-eslint/no-use-before-define': 'warn',
 			'@typescript-eslint/no-explicit-any': 'error',
+			'n8n-local-rules/no-reka-ui-pagination': 'error',
 		},
 	},
 	{
@@ -36,8 +40,10 @@ export const frontendConfig = tseslint.config(
 	{
 		files: ['**/*.test.ts', '**/test/**/*.ts', '**/__tests__/**/*.ts', '**/*.stories.ts'],
 		rules: {
-			'import-x/no-extraneous-dependencies': 'warn',
 			'vue/one-component-per-file': 'off',
+
+			// TODO: remove these
+			'n8n-local-rules/no-internal-package-import': 'warn',
 		},
 	},
 	{
@@ -57,12 +63,26 @@ export const frontendConfig = tseslint.config(
 			'vue/no-multiple-template-root': 'error',
 			'vue/v-slot-style': 'error',
 			'vue/no-unused-components': 'error',
+			'vue/no-undef-components': [
+				'error',
+				{
+					ignorePatterns: [
+						'RouterLink', // Vue Router global component
+						'RouterView', // Vue Router global component
+						'Teleport', // Vue 3 built-in
+						'Transition', // Vue 3 built-in
+						'TransitionGroup', // Vue 3 built-in
+						'KeepAlive', // Vue 3 built-in
+						'Suspense', // Vue 3 built-in
+					],
+				},
+			],
 			'vue/multi-word-component-names': 'off',
 			'vue/component-name-in-template-casing': [
 				'error',
 				'PascalCase',
 				{
-					registeredComponentsOnly: true,
+					registeredComponentsOnly: false,
 				},
 			],
 			'vue/no-reserved-component-names': [
@@ -98,6 +118,7 @@ export const frontendConfig = tseslint.config(
 			'vue/no-side-effects-in-computed-properties': 'warn',
 			'vue/no-v-text-v-html-on-component': 'warn',
 			'vue/return-in-computed-property': 'warn',
+			'n8n-local-rules/no-internal-package-import': 'warn',
 		},
 	},
 	eslintConfigPrettier,

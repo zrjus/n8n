@@ -1,10 +1,11 @@
 import { Logger } from '@n8n/backend-common';
+import { isBillableExecution } from '@n8n/backend-services';
 import { SharedWorkflowRepository } from '@n8n/db';
 import { OnLifecycleEvent, type WorkflowExecuteAfterContext } from '@n8n/decorators';
 import { Service } from '@n8n/di';
 import { In } from '@n8n/typeorm';
 import { DateTime } from 'luxon';
-import { UnexpectedError, type ExecutionStatus, type WorkflowExecuteMode } from 'n8n-workflow';
+import { IRun, type ExecutionStatus, type WorkflowExecuteMode } from 'n8n-workflow';
 
 import { InsightsMetadata } from '@/modules/insights/database/entities/insights-metadata';
 import { InsightsRaw } from '@/modules/insights/database/entities/insights-raw';
@@ -40,7 +41,29 @@ const shouldSkipMode: Record<WorkflowExecuteMode, boolean> = {
 	internal: true,
 
 	manual: true,
+
+	// n8n Chat hub messages
+	chat: true,
+
+	// Agent executions
+	agent: true,
 };
+
+const MIN_RUNTIME = 0;
+
+// PostgreSQL INTEGER max (signed 32-bit)
+const MAX_RUNTIME = 2 ** 31 - 1;
+
+/**
+ * `insights_raw.value` is stored as BIGINT in PostgreSQL. Non-integer JavaScript
+ * numbers are serialized with a fractional part and rejected by the driver
+ */
+function integerValueForInsightsRaw(value: number): number {
+	if (!Number.isFinite(value)) {
+		return 0;
+	}
+	return Math.round(value);
+}
 
 type BufferedInsight = Pick<InsightsRaw, 'type' | 'value' | 'timestamp'> & {
 	workflowId: string;
@@ -63,6 +86,8 @@ export class InsightsCollectionService {
 
 	private flushesInProgress: Set<Promise<void>> = new Set();
 
+	private isInitialized = false;
+
 	constructor(
 		private readonly sharedWorkflowRepository: SharedWorkflowRepository,
 		private readonly insightsRawRepository: InsightsRawRepository,
@@ -73,13 +98,18 @@ export class InsightsCollectionService {
 		this.logger = this.logger.scoped('insights');
 	}
 
-	startFlushingTimer() {
+	init() {
+		this.isInitialized = true;
 		this.isAsynchronouslySavingInsights = true;
+
 		this.scheduleFlushing();
 		this.logger.debug('Started flushing timer');
 	}
 
 	scheduleFlushing() {
+		// Safe guard to prevent scheduling flushing when not initialized
+		if (!this.isInitialized) return;
+
 		this.cancelScheduledFlushing();
 		this.flushInsightsRawBufferTimer = setTimeout(
 			async () => await this.flushEvents(),
@@ -110,11 +140,25 @@ export class InsightsCollectionService {
 		// Flush any remaining events
 		this.logger.debug('Flushing remaining insights before shutdown');
 		await Promise.all([...this.flushesInProgress, this.flushEvents()]);
+
+		this.isInitialized = false;
 	}
 
 	@OnLifecycleEvent('workflowExecuteAfter')
 	async handleWorkflowExecuteAfter(ctx: WorkflowExecuteAfterContext) {
+		// Safe guard to prevent collecting events when not initialized
+		if (!this.isInitialized) {
+			return;
+		}
+
 		if (shouldSkipStatus[ctx.runData.status] || shouldSkipMode[ctx.runData.mode]) {
+			return;
+		}
+
+		// Instance AI verification runs mimic the trigger's execution mode, so a
+		// schedule/form/webhook-triggered workflow would otherwise report them as
+		// production runs. They are test runs on the user's behalf — skip them.
+		if (ctx.source === 'instance_ai') {
 			return;
 		}
 
@@ -133,9 +177,21 @@ export class InsightsCollectionService {
 			value: 1,
 		});
 
+		if (isBillableExecution(ctx.runData, ctx.source)) {
+			this.bufferedInsights.add({
+				...commonWorkflowData,
+				type: 'billable',
+				value: 1,
+			});
+		}
+
 		// run time event
 		if (ctx.runData.stoppedAt) {
-			const value = ctx.runData.stoppedAt.getTime() - ctx.runData.startedAt.getTime();
+			const runtimeMs = ctx.runData.stoppedAt.getTime() - ctx.runData.startedAt.getTime();
+			if (runtimeMs < MIN_RUNTIME || runtimeMs > MAX_RUNTIME) {
+				this.logger.warn(`Invalid runtime detected: ${runtimeMs}ms, clamping to safe range`);
+			}
+			const value = Math.min(Math.max(runtimeMs, MIN_RUNTIME), MAX_RUNTIME);
 			this.bufferedInsights.add({
 				...commonWorkflowData,
 				type: 'runtime_ms',
@@ -143,13 +199,16 @@ export class InsightsCollectionService {
 			});
 		}
 
-		// time saved event
-		if (status === 'success' && ctx.workflow.settings?.timeSavedPerExecution) {
-			this.bufferedInsights.add({
-				...commonWorkflowData,
-				type: 'time_saved_min',
-				value: ctx.workflow.settings.timeSavedPerExecution,
-			});
+		// time saved event (error workflows are operational, not productive work)
+		if (status === 'success' && ctx.runData.mode !== 'error') {
+			const finalTimeSaved = this.calculateTimeSaved(ctx);
+			if (finalTimeSaved !== undefined) {
+				this.bufferedInsights.add({
+					...commonWorkflowData,
+					type: 'time_saved_min',
+					value: finalTimeSaved,
+				});
+			}
 		}
 
 		if (!this.isAsynchronouslySavingInsights) {
@@ -211,28 +270,44 @@ export class InsightsCollectionService {
 		}
 
 		const events: InsightsRaw[] = [];
+		const workflowIdsWithoutMetadata = new Set<string>();
 		for (const event of insightsRawToInsertBuffer) {
 			const insight = new InsightsRaw();
 			const metadata = this.cachedMetadata.get(event.workflowId);
 			if (!metadata) {
-				// could not find shared workflow for this insight (not supposed to happen)
-				throw new UnexpectedError(
-					`Could not find shared workflow for insight with workflowId ${event.workflowId}`,
-				);
+				// No shared workflow row, so the insight cannot be attributed to a project.
+				// Drop it instead of failing the batch: a throw here sends every event back
+				// into the buffer, and the next flush rebuilds the same batch, so one
+				// un-attributable event would stall collection until the process restarts.
+				workflowIdsWithoutMetadata.add(event.workflowId);
+				continue;
 			}
 			insight.metaId = metadata.metaId;
 			insight.type = event.type;
-			insight.value = event.value;
+			insight.value = integerValueForInsightsRaw(event.value);
 			insight.timestamp = event.timestamp;
 
 			events.push(insight);
 		}
+
+		if (workflowIdsWithoutMetadata.size > 0) {
+			this.logger.warn('Dropped insights for workflows with no shared workflow', {
+				workflowIds: [...workflowIdsWithoutMetadata],
+			});
+		}
+
+		if (events.length === 0) return;
 
 		this.logger.debug(`Inserting ${events.length} insights raw`);
 		await this.insightsRawRepository.insert(events);
 	}
 
 	async flushEvents() {
+		// Safe guard to prevent flushing when not initialized
+		if (!this.isInitialized) {
+			return;
+		}
+
 		// Prevent flushing if there are no events to flush
 		if (this.bufferedInsights.size === 0) {
 			// reschedule the timer to flush again
@@ -266,5 +341,46 @@ export class InsightsCollectionService {
 		// Add the flush promise to the set of flushes in progress for shutdown await
 		this.flushesInProgress.add(flushPromise);
 		await flushPromise;
+	}
+
+	/**
+	 * Calculate the final time saved value by extracting SavedTime node metadata
+	 * and combining it with workflow settings based on the node's behavior.
+	 */
+	private calculateTimeSaved(ctx: WorkflowExecuteAfterContext): number {
+		const workflowTimeSaved = ctx.workflow.settings?.timeSavedPerExecution;
+
+		// backwards compatibility for legacy workflows with no time saved mode
+		if (ctx.workflow.settings?.timeSavedMode !== 'dynamic') {
+			return workflowTimeSaved ?? 0;
+		}
+
+		const nodeTimeSaved = this.extractTimeSavedFromNodes(ctx.runData);
+
+		return nodeTimeSaved;
+	}
+
+	/**
+	 * Extract and sum time saved from all SavedTime nodes in the workflow execution.
+	 * Returns undefined if no SavedTime nodes were executed.
+	 */
+	private extractTimeSavedFromNodes(runData: IRun): number {
+		let totalMinutes = 0;
+
+		const resultData = runData.data.resultData?.runData ?? {};
+
+		// Iterate through all node metadata
+		for (const nodeName in resultData) {
+			const taskData = resultData[nodeName];
+
+			// Each node can have multiple run indexes
+			for (const taskDataEntry of taskData) {
+				if (taskDataEntry?.metadata?.timeSaved) {
+					totalMinutes += taskDataEntry?.metadata?.timeSaved.minutes;
+				}
+			}
+		}
+
+		return totalMinutes;
 	}
 }

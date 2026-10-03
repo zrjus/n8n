@@ -13,6 +13,9 @@
                 "accepted_gift_types": {
                     "type": "object",
                     "properties": {
+                        "gifts_from_channels": {
+                            "type": "boolean"
+                        },
                         "limited_gifts": {
                             "type": "boolean"
                         },
@@ -42,9 +45,6 @@
                 "id": {
                     "type": "integer"
                 },
-                "last_name": {
-                    "type": "string"
-                },
                 "max_reaction_count": {
                     "type": "integer"
                 },
@@ -57,5 +57,5 @@
             }
         }
     },
-    "version": 4
+    "version": 6
 }

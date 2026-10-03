@@ -7,6 +7,9 @@
                 "canAcceptOwnership": {
                     "type": "boolean"
                 },
+                "canAccessViaGenAi": {
+                    "type": "boolean"
+                },
                 "canAddChildren": {
                     "type": "boolean"
                 },
@@ -14,6 +17,9 @@
                     "type": "boolean"
                 },
                 "canChangeCopyRequiresWriterPermission": {
+                    "type": "boolean"
+                },
+                "canChangeItemDownloadRestriction": {
                     "type": "boolean"
                 },
                 "canChangeSecurityUpdateEnabled": {
@@ -94,6 +100,9 @@
                 "canShare": {
                     "type": "boolean"
                 },
+                "canStartApproval": {
+                    "type": "boolean"
+                },
                 "canTrash": {
                     "type": "boolean"
                 },
@@ -102,11 +111,63 @@
                 }
             }
         },
+        "clientEncryptionDetails": {
+            "type": "object",
+            "properties": {
+                "decryptionMetadata": {
+                    "type": "object",
+                    "properties": {
+                        "aes256GcmChunkSize": {
+                            "type": "string"
+                        },
+                        "encryptionResourceKeyHash": {
+                            "type": "string"
+                        },
+                        "kaclsId": {
+                            "type": "string"
+                        },
+                        "keyFormat": {
+                            "type": "string"
+                        },
+                        "wrappedKey": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "copyRequiresWriterPermission": {
             "type": "boolean"
         },
         "createdTime": {
             "type": "string"
+        },
+        "downloadRestrictions": {
+            "type": "object",
+            "properties": {
+                "effectiveDownloadRestrictionWithContext": {
+                    "type": "object",
+                    "properties": {
+                        "restrictedForReaders": {
+                            "type": "boolean"
+                        },
+                        "restrictedForWriters": {
+                            "type": "boolean"
+                        }
+                    }
+                },
+                "itemDownloadRestriction": {
+                    "type": "object",
+                    "properties": {
+                        "restrictedForReaders": {
+                            "type": "boolean"
+                        },
+                        "restrictedForWriters": {
+                            "type": "boolean"
+                        }
+                    }
+                }
+            }
         },
         "explicitlyTrashed": {
             "type": "boolean"
@@ -128,6 +189,20 @@
         },
         "id": {
             "type": "string"
+        },
+        "imageMediaMetadata": {
+            "type": "object",
+            "properties": {
+                "height": {
+                    "type": "integer"
+                },
+                "rotation": {
+                    "type": "integer"
+                },
+                "width": {
+                    "type": "integer"
+                }
+            }
         },
         "inheritedPermissionsDisabled": {
             "type": "boolean"
@@ -290,6 +365,9 @@
         "starred": {
             "type": "boolean"
         },
+        "thumbnailLink": {
+            "type": "string"
+        },
         "thumbnailVersion": {
             "type": "string"
         },
@@ -315,5 +393,5 @@
             "type": "boolean"
         }
     },
-    "version": 3
+    "version": 8
 }

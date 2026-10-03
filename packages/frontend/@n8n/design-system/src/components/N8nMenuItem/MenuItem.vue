@@ -1,428 +1,360 @@
 <script lang="ts" setup>
-import { ElSubMenu, ElMenuItem } from 'element-plus';
-import { computed, useCssModule, getCurrentInstance } from 'vue';
-import { useRoute } from 'vue-router';
+import { useResizeObserver } from '@vueuse/core';
+import type { ComponentPublicInstance } from 'vue';
+import { computed, ref } from 'vue';
 
-import { doesMenuItemMatchCurrentRoute } from './routerUtil';
-import type { IMenuItem, IMenuElement } from '../../types';
-import { isCustomMenuItem } from '../../types';
-import type { IconColor } from '../../types/icon';
-import { getInitials } from '../../utils/labelUtil';
-import ConditionalRouterLink from '../ConditionalRouterLink';
+import { useI18n } from '../../composables/useI18n';
+import type { IMenuItem } from '../../types';
+import N8nBadge from '../N8nBadge';
 import N8nIcon from '../N8nIcon';
-import N8nSpinner from '../N8nSpinner';
+import type { IconName } from '../N8nIcon/icons';
+import N8nRoute from '../N8nRoute';
 import N8nText from '../N8nText';
 import N8nTooltip from '../N8nTooltip';
+import PreviewBadge from '../PreviewBadge/PreviewBadge.vue';
 
-interface MenuItemProps {
+const { t } = useI18n();
+
+const props = defineProps<{
 	item: IMenuItem;
+	active?: boolean;
+	empty?: boolean;
 	compact?: boolean;
-	tooltipDelay?: number;
-	popperClass?: string;
-	mode?: 'router' | 'tabs';
-	activeTab?: string;
-	handleSelect?: (item: IMenuItem) => void;
-}
+	level?: number;
+	open?: boolean;
+	ariaLabel?: string;
+	scrollLabelOnOverflow?: boolean;
+}>();
 
-const props = withDefaults(defineProps<MenuItemProps>(), {
-	compact: false,
-	tooltipDelay: 300,
-	popperClass: '',
-	mode: 'router',
-	activeTab: undefined,
-	handleSelect: undefined,
+const emit = defineEmits<{
+	click: [];
+}>();
+
+const menuItemTextViewport = ref<HTMLElement | null>(null);
+const menuItemText = ref<ComponentPublicInstance | null>(null);
+const labelOverflows = ref(false);
+
+// Observing the text too catches label changes, which do not resize the viewport.
+useResizeObserver([menuItemTextViewport, menuItemText], () => {
+	const viewport = menuItemTextViewport.value;
+	labelOverflows.value = viewport !== null && viewport.scrollWidth > viewport.clientWidth;
 });
 
-const $style = useCssModule();
-const $route = useRoute();
-
-const availableChildren = computed((): IMenuElement[] =>
-	Array.isArray(props.item.children)
-		? props.item.children.filter((child) => child.available !== false)
-		: [],
+const isLabelOverflowing = computed(
+	() => Boolean(props.scrollLabelOnOverflow) && labelOverflows.value,
 );
 
-const currentRoute = computed(() => {
-	return $route ?? { name: '', path: '' };
-});
-
-const submenuPopperClass = computed((): string => {
-	const popperClass = [$style.submenuPopper, props.popperClass];
-	if (props.compact) {
-		popperClass.push($style.compact);
-	}
-	return popperClass.join(' ');
-});
-
-const isActive = (item: IMenuElement): boolean => {
-	if (props.mode === 'router') {
-		return doesMenuItemMatchCurrentRoute(item, currentRoute.value);
-	} else {
-		return item.id === props.activeTab;
-	}
-};
-
-const isItemActive = (item: IMenuItem): boolean => {
-	const hasActiveChild =
-		Array.isArray(item.children) && item.children.some((child) => isActive(child));
-	return isActive(item) || hasActiveChild;
-};
-
-// Get self component to avoid dependency cycle
-const N8nMenuItem = getCurrentInstance()?.type;
-
-const getIconColor = (item: IMenuItem): IconColor | undefined => {
-	if (typeof item.icon === 'string') {
+const to = computed(() => {
+	if (props.item.disabled) {
 		return undefined;
 	}
 
-	return item.icon?.color;
+	if (props.item.route) {
+		return props.item.route.to;
+	}
+
+	if (props.item.link) {
+		return props.item.link.href;
+	}
+
+	return undefined;
+});
+
+const handleClick = () => {
+	if (props.item.disabled) {
+		return;
+	}
+	emit('click');
 };
+
+const icon = computed<IconName | (string & {}) | undefined>(() => {
+	if (typeof props.item.icon === 'object' && props.item.icon?.type === 'icon') {
+		return props.item.icon.value;
+	}
+
+	if (typeof props.item.icon === 'string') {
+		return props.item.icon;
+	}
+
+	return undefined;
+});
+
+const iconColor = computed(() => {
+	// If the icon is a string, we use the default color
+	if (typeof props.item.icon === 'string') {
+		return undefined;
+	}
+
+	return props.item.icon?.color;
+});
+
+const tooltipDisabled = computed(() => {
+	return !props.compact && !(props.item.disabled && props.item.disabledReason);
+});
+
+const tooltipContent = computed(() => {
+	if (props.item.disabled && props.item.disabledReason) {
+		return props.item.disabledReason;
+	}
+
+	if (props.compact) {
+		return props.item.label;
+	}
+
+	return undefined;
+});
+
+const tooltipPlacement = computed(() => {
+	return props.item.disabled && props.item.disabledReason ? 'top' : 'right';
+});
 </script>
 
 <template>
-	<div :class="['n8n-menu-item', $style.item]">
-		<ElSubMenu
-			v-if="item.children?.length"
-			:id="item.id"
-			:class="{
-				[$style.submenu]: true,
-				[$style.compact]: compact,
-				[$style.active]: mode === 'router' && isItemActive(item),
-			}"
-			:index="item.id"
-			teleported
-			:popper-class="submenuPopperClass"
-		>
-			<template #title>
-				<template v-if="item.icon">
-					<div :class="$style.icon">
-						<div :class="$style.notificationContainer">
-							<N8nIcon
-								v-if="typeof item.icon === 'string' || item.icon.type === 'icon'"
-								:icon="typeof item.icon === 'object' ? item.icon.value : item.icon"
-								:size="item.customIconSize || 'large'"
-								:color="getIconColor(item)"
-							/>
-							<N8nText
-								v-else-if="item.icon.type === 'emoji'"
-								:size="item.customIconSize || 'large'"
-								:color="getIconColor(item)"
-							>
-								{{ item.icon.value }}
-							</N8nText>
-							<div v-if="item.notification" :class="$style.notification">
-								<div></div>
-							</div>
-						</div>
-					</div>
-				</template>
-				<span v-if="!compact" :class="$style.label">{{ item.label }}</span>
-				<span v-if="!item.icon && compact" :class="[$style.label, $style.compactLabel]">{{
-					getInitials(item.label)
-				}}</span>
+	<div :data-test-id="item.id" :class="$style.menuItemWrapper">
+		<N8nTooltip :placement="tooltipPlacement" :disabled="tooltipDisabled" :show-after="500">
+			<template #content>
+				{{ tooltipContent }}
 			</template>
-			<template v-for="child in availableChildren" :key="child.id">
-				<component
-					:is="child.component"
-					v-if="isCustomMenuItem(child)"
-					v-bind="child.props"
-					:class="$style.custom"
-				/>
-				<N8nMenuItem
-					v-else
-					:item="child"
-					:compact="false"
-					:tooltip-delay="tooltipDelay"
-					:popper-class="popperClass"
-					:mode="mode"
-					:active-tab="activeTab"
-					:handle-select="handleSelect"
-				/>
-			</template>
-		</ElSubMenu>
-		<N8nTooltip
-			v-else
-			placement="right"
-			:content="compact ? item.label : ''"
-			:disabled="!compact"
-			:show-after="tooltipDelay"
-		>
-			<ConditionalRouterLink v-bind="item.route ?? item.link">
-				<ElMenuItem
-					:id="item.id"
-					:class="{
-						[$style.menuItem]: true,
-						[$style.item]: true,
-						[$style.disableActiveStyle]: !isItemActive(item),
-						[$style.active]: isItemActive(item),
-						[$style.compact]: compact,
-						[$style.small]: item.size === 'small',
-					}"
-					data-test-id="menu-item"
-					:index="item.id"
-					:disabled="item.disabled"
-					@click="handleSelect?.(item)"
-				>
-					<template v-if="item.icon">
-						<div :class="$style.icon">
-							<div :class="$style.notificationContainer">
-								<N8nIcon
-									v-if="typeof item.icon === 'string' || item.icon.type === 'icon'"
-									:icon="typeof item.icon === 'object' ? item.icon.value : item.icon"
-									:size="item.customIconSize || 'large'"
-									:color="getIconColor(item)"
-								/>
-								<N8nText
-									v-else-if="item.icon.type === 'emoji'"
-									:size="item.customIconSize || 'large'"
-									:color="getIconColor(item)"
-								>
-									{{ item.icon.value }}
-								</N8nText>
-								<div v-if="item.notification" :class="$style.notification">
-									<div></div>
-								</div>
-							</div>
-						</div>
-					</template>
 
-					<span v-if="!compact" :class="$style.label">{{ item.label }}</span>
-					<span v-if="!item.icon && compact" :class="[$style.label, $style.compactLabel]">{{
-						getInitials(item.label)
-					}}</span>
-					<N8nTooltip
-						v-if="item.secondaryIcon"
-						:placement="item.secondaryIcon?.tooltip?.placement || 'right'"
-						:content="item.secondaryIcon?.tooltip?.content"
-						:disabled="compact || !item.secondaryIcon?.tooltip?.content"
-						:show-after="tooltipDelay"
+			<N8nRoute
+				:id="item.id"
+				:to="to"
+				role="menuitem"
+				:class="[
+					$style.menuItem,
+					{
+						[$style.active]: active,
+						[$style.compact]: compact,
+						[$style.disabled]: item.disabled,
+						[$style.clipOverflowLabel]: props.scrollLabelOnOverflow,
+					},
+				]"
+				:aria-label="props.ariaLabel ?? props.item.label"
+				:aria-disabled="item.disabled"
+				data-test-id="menu-item"
+				@click="handleClick"
+			>
+				<div
+					v-if="item.icon"
+					:class="[$style.menuItemIcon, { [$style.notification]: item.notification }]"
+				>
+					<N8nText
+						v-if="item.icon && typeof item.icon === 'object' && item.icon.type === 'emoji'"
+						:class="$style.menuItemEmoji"
+						>{{ item.icon.value }}</N8nText
 					>
-						<N8nIcon
-							:class="$style.secondaryIcon"
-							:icon="item.secondaryIcon.name"
-							:size="item.secondaryIcon.size || 'small'"
-						/>
-					</N8nTooltip>
-					<N8nSpinner v-if="item.isLoading" :class="$style.loading" size="small" />
-				</ElMenuItem>
-			</ConditionalRouterLink>
+					<N8nIcon v-else-if="icon" :color="iconColor" :icon="icon" />
+				</div>
+				<div :class="$style.menuItemLabel">
+					<div
+						v-if="!compact"
+						ref="menuItemTextViewport"
+						:class="[
+							$style.menuItemTextViewport,
+							{
+								[$style.scrollLabelOnOverflow]: props.scrollLabelOnOverflow,
+								[$style.labelOverflowing]: isLabelOverflowing,
+							},
+						]"
+					>
+						<N8nText
+							ref="menuItemText"
+							:class="$style.menuItemText"
+							:color="item.disabled ? 'text-light' : 'text-dark'"
+						>
+							{{ item.label }}
+						</N8nText>
+					</div>
+					<PreviewBadge v-if="!compact && item.preview" />
+					<N8nBadge
+						v-if="!compact && item.new"
+						size="xxsmall"
+						variant="filled"
+						:class="$style.newBadge"
+					>
+						{{ t('menuItem.new') }}
+					</N8nBadge>
+					<N8nBadge v-if="!compact && item.creditsTag" size="xxsmall" variant="success">
+						{{ item.creditsTag }}
+					</N8nBadge>
+				</div>
+				<N8nIcon v-if="item.children && !compact" icon="chevron-right" color="text-light" />
+			</N8nRoute>
 		</N8nTooltip>
 	</div>
 </template>
 
-<style module lang="scss">
-// Element menu-item overrides
-:global(.el-menu-item),
-:global(.el-sub-menu__title) {
-	--menu-font-color: var(--color-text-base);
-	--menu-item-active-background-color: var(--color-foreground-base);
-	--menu-item-active-font-color: var(--color-text-dark);
-	--menu-item-hover-fill: var(--color-foreground-base);
-	--menu-item-hover-font-color: var(--color-text-dark);
-	--menu-item-height: 35px;
-	--sub-menu-item-height: 27px;
-}
+<style lang="scss" module>
+@use '../../css/mixins/mixins' as scroll-mask;
+@use '../../css/mixins/motion' as motion;
 
-.submenu {
-	background: none !important;
-
-	&.compact :global(.el-sub-menu__title) {
-		i {
-			display: none;
-		}
-	}
-
-	:global(.el-sub-menu__title) {
-		display: flex;
-		align-items: center;
-		border-radius: var(--border-radius-base) !important;
-		padding: var(--spacing-2xs) var(--spacing-xs) !important;
-		user-select: none;
-
-		i {
-			padding-top: 2px;
-			&:hover {
-				color: var(--color-primary);
-			}
-		}
-
-		&:hover {
-			.icon {
-				color: var(--color-text-dark);
-			}
-		}
-	}
-
-	.menuItem {
-		height: var(--sub-menu-item-height) !important;
-		min-width: auto !important;
-		margin: var(--spacing-2xs) 0 !important;
-		padding-left: var(--spacing-l) !important;
-		user-select: none;
-
-		&:hover {
-			.icon {
-				color: var(--color-text-dark);
-			}
-		}
-	}
-}
-
-.disableActiveStyle {
-	background-color: initial !important;
-	color: var(--color-text-base) !important;
-
-	svg {
-		color: var(--color-text-base) !important;
-	}
-
-	&:hover {
-		background-color: var(--color-foreground-base) !important;
-		svg {
-			color: var(--color-text-dark) !important;
-		}
-		&:global(.el-sub-menu) {
-			background-color: unset !important;
-		}
-	}
-}
-
-.active {
-	&,
-	& :global(.el-sub-menu__title) {
-		background-color: var(--color-foreground-base);
-		border-radius: var(--border-radius-base);
-		.icon {
-			color: var(--color-text-dark);
-		}
-	}
+.menuItemWrapper {
+	position: relative;
+	width: 100%;
+	max-width: 100%;
+	margin-bottom: var(--spacing--5xs);
 }
 
 .menuItem {
 	display: flex;
-	padding: var(--spacing-2xs) var(--spacing-xs) !important;
-	margin: 0 !important;
-	border-radius: var(--border-radius-base) !important;
-	overflow: hidden;
+	align-items: center;
+	justify-content: center;
+	// Match the height of items with icons (24px icon + 2 * 4px padding), so
+	// icon-less items (e.g. modal sidebar tabs) don't render shorter.
+	min-height: var(--spacing--xl);
+	padding: var(--spacing--4xs);
+	gap: var(--spacing--4xs);
+	cursor: pointer;
+	color: var(--color--text);
+	border-radius: var(--spacing--4xs);
+	cursor: pointer;
+	min-width: 0;
+	width: 100%;
+	position: relative;
 
-	&.compact {
-		padding: var(--spacing-2xs) 0 !important;
-		justify-content: center;
+	&:hover:not(.disabled) .menuItemIcon {
+		color: var(--color--text--shade-1);
 	}
 
-	&.small {
-		font-size: var(--font-size-2xs) !important;
-		padding-top: var(--spacing-3xs) !important;
-		padding-bottom: var(--spacing-3xs) !important;
-		padding-left: var(--spacing-s) !important;
-		padding-right: var(--spacing-xs) !important;
+	&:global(.router-link-active),
+	&.active {
+		background-color: var(--color--background--light-1);
+	}
 
-		.icon {
-			margin-right: var(--spacing-3xs);
+	&:hover:not(.active):not(:global(.router-link-active)):not(.disabled) {
+		background-color: var(--color--background--light-1);
+		color: var(--color--text--shade-1);
+	}
+
+	&.compact {
+		gap: 0;
+	}
+}
+
+.menuItem:focus-visible {
+	outline: 1px solid var(--color--secondary);
+	outline-offset: -1px;
+}
+
+.menuItem.disabled {
+	cursor: not-allowed;
+}
+
+.clipOverflowLabel {
+	overflow: hidden;
+}
+
+.menuItemTextViewport {
+	flex: 1;
+	min-width: 0;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	overflow: hidden;
+}
+
+.menuItemText {
+	display: block;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	line-height: var(--font-size--lg);
+	min-width: 0;
+}
+
+.scrollLabelOnOverflow {
+	container-type: inline-size;
+	margin-inline-end: calc(var(--spacing--4xs) * -1);
+
+	.menuItemText {
+		display: inline-block;
+		overflow: visible;
+		max-width: none;
+		transition: transform 0s linear;
+		@include motion.reduced-motion;
+	}
+}
+
+.labelOverflowing {
+	@include scroll-mask.scroll-mask(right);
+}
+
+@media (hover: hover) and (pointer: fine) {
+	.menuItem:hover .scrollLabelOnOverflow.labelOverflowing {
+		text-overflow: clip;
+		animation: revealLeftOverflowFade 0s var(--duration--base) forwards;
+		@include motion.reduced-motion;
+
+		.menuItemText {
+			transform: translateX(min(0px, calc(-100% + 100cqi)));
+			transition-duration: calc(var(--duration--slowest) + var(--duration--slowest));
+			transition-delay: var(--duration--base);
+			transition-timing-function: linear;
 		}
 	}
 }
 
-.icon {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	text-align: center;
-	line-height: 1;
-	min-width: var(--spacing-s);
-	margin-right: var(--spacing-xs);
+@media (prefers-reduced-motion: reduce) {
+	.menuItem:hover .scrollLabelOnOverflow.labelOverflowing {
+		@include scroll-mask.scroll-mask(right);
 
-	svg {
-		margin-right: 0 !important;
+		.menuItemText {
+			transform: none;
+		}
 	}
 }
 
-.notificationContainer {
-	display: flex;
-	position: relative;
+@keyframes revealLeftOverflowFade {
+	to {
+		@include scroll-mask.scroll-mask(x);
+	}
 }
 
-.notification {
+.menuItemText * {
+	color: var(--color--text);
+}
+
+.menuItemIcon {
+	position: relative;
+	width: var(--spacing--lg);
+	height: var(--spacing--lg);
+	min-width: var(--spacing--lg);
 	display: flex;
-	position: absolute;
-	top: -0.15em;
-	right: -0.3em;
 	align-items: center;
 	justify-content: center;
 
-	div {
-		height: 0.36em;
-		width: 0.36em;
-		background-color: var(--color-primary);
+	&.notification::after {
+		content: '';
+		position: absolute;
+		top: 0;
+		right: 0;
+		width: var(--spacing--4xs);
+		height: var(--spacing--4xs);
+		background-color: var(--color--danger);
 		border-radius: 50%;
 	}
 }
 
-.loading {
-	margin-left: var(--spacing-xs);
+.menuItemEmoji {
+	font-size: var(--spacing--sm);
+	line-height: 1;
 }
 
-.secondaryIcon {
+.menuItem.active {
+	.menuItemIcon {
+		color: var(--color--text--shade-1);
+	}
+}
+
+.menuItemLabel {
 	display: flex;
 	align-items: center;
-	justify-content: flex-end;
+	flex-direction: row;
+	gap: var(--spacing--3xs);
 	flex: 1;
-	margin-left: 20px;
+	min-width: 0;
 }
 
-.label {
-	overflow: hidden;
-	text-overflow: ellipsis;
-	user-select: none;
-}
-
-.compactLabel {
-	text-overflow: unset;
-}
-
-.item + .item {
-	margin-top: 8px !important;
-}
-
-.compact {
-	.icon {
-		margin: 0;
-		overflow: visible !important;
-		visibility: visible !important;
-		width: initial !important;
-		height: initial !important;
-	}
-	.secondaryIcon {
-		display: none;
-	}
-}
-
-.submenuPopper {
-	display: block;
-
-	ul {
-		padding: var(--spacing-3xs) var(--spacing-2xs) !important;
-	}
-
-	.menuItem {
-		display: flex;
-		padding: var(--spacing-2xs) !important;
-		margin: var(--spacing-2xs) 0 !important;
-	}
-
-	.icon {
-		margin-right: var(--spacing-xs);
-	}
-
-	&.compact {
-		.label {
-			display: inline-block;
-		}
-	}
-
-	.custom {
-		margin-left: 0 !important;
-	}
+.menuItem .newBadge {
+	flex-shrink: 0;
 }
 </style>

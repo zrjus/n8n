@@ -1,16 +1,20 @@
-import { action } from '@storybook/addon-actions';
-import type { StoryFn } from '@storybook/vue3';
-
-import type { IUser } from '@n8n/design-system/types';
+import type { StoryFn } from '@storybook/vue3-vite';
+import { action } from 'storybook/actions';
 
 import N8nUsersList from './UsersList.vue';
+import type { IUser } from '../../types';
 
 export default {
-	title: 'Modules/UsersList',
+	title: 'Core/UsersList',
 	component: N8nUsersList,
 	argTypes: {},
 	parameters: {
-		backgrounds: { default: '--color-background-light' },
+		docs: {
+			description: {
+				component: 'A list layout for showing multiple users with associated metadata.',
+			},
+		},
+		backgrounds: { default: '--color--background--light-2' },
 	},
 };
 
@@ -28,8 +32,8 @@ const Template: StoryFn = (args, { argTypes }) => ({
 	methods,
 });
 
-export const UsersList = Template.bind({});
-UsersList.args = {
+export const Default = Template.bind({});
+Default.args = {
 	actions: [
 		{
 			label: 'Resend Invite',
