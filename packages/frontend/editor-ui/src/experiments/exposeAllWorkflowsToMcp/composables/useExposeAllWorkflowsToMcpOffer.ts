@@ -2,7 +2,7 @@ import { useSettingsStore } from '@n8n/stores/settings.store';
 import { useUIStore } from '@/app/stores/ui.store';
 import { EXPOSE_ALL_WORKFLOWS_TO_MCP_MODAL_KEY } from '@/experiments/exposeAllWorkflowsToMcp/constants';
 import { useExposeAllWorkflowsToMcpStore } from '@/experiments/exposeAllWorkflowsToMcp/stores/exposeAllWorkflowsToMcp.store';
-import { useMCPStore } from '@/features/ai/mcpAccess/mcp.store';
+import { useMCPStore } from '@n8n/frontend-module-mcp';
 
 export function useExposeAllWorkflowsToMcpOffer() {
 	const experimentStore = useExposeAllWorkflowsToMcpStore();
@@ -27,7 +27,7 @@ export function useExposeAllWorkflowsToMcpOffer() {
 			const [eligibleWorkflows, eligibleAgents] = await Promise.all([
 				mcpStore.getMcpEligibleWorkflows({ take: 1 }),
 				settingsStore.isAgentsEnabled
-					? mcpStore.getMcpEligibleAgents({ take: 1 })
+					? mcpStore.getMcpEligibleAgents({ limit: 1 })
 					: Promise.resolve({ count: 0 }),
 			]);
 			if (eligibleWorkflows.count === 0 && eligibleAgents.count === 0) {
